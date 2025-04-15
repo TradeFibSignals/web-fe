@@ -1,0 +1,236 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 225 30% 8%;
+    --foreground: 210 40% 98%;
+
+    --card: 225 32% 10%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 225 32% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 225 32% 15%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 225 32% 15%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 225 32% 15%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 210 40% 98%;
+
+    --border: 225 32% 15%;
+    --input: 225 32% 15%;
+    --ring: 224 71.4% 4.1%;
+
+    --radius: 0.5rem;
+
+    /* Chart colors */
+    --chart-1: 221 83% 53%;
+    --chart-2: 0 84% 60%;
+    --chart-3: 142 76% 36%;
+    --chart-4: 48 96% 53%;
+    --chart-5: 262 83% 58%;
+
+    /* Liquidation colors */
+    --long-liquidation: 0 84% 60%;
+    --short-liquidation: 142 76% 36%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.liquidation-zone {
+  position: absolute;
+  left: 40px;
+  right: 0;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.liquidation-zone.exit {
+  background: linear-gradient(to bottom, rgba(239, 68, 68, 0.8), rgba(239, 68, 68, 0.3));
+}
+
+.liquidation-zone.entry {
+  background: linear-gradient(to top, rgba(16, 185, 129, 0.8), rgba(16, 185, 129, 0.3));
+}
+
+.price-line {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  border-top: 2px dashed #ffc107;
+  z-index: 10;
+}
+
+.price-label {
+  position: absolute;
+  right: 0;
+  background-color: #ffc107;
+  color: black;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  transform: translateY(-50%);
+}
+
+.signal-marker {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.signal-marker.entry {
+  border: 2px solid hsl(var(--short-liquidation));
+  background-color: rgba(16, 185, 129, 0.2);
+}
+
+.signal-marker.exit {
+  border: 2px solid hsl(var(--long-liquidation));
+  background-color: rgba(239, 68, 68, 0.2);
+}
+
+.signal-label {
+  position: absolute;
+  font-size: 12px;
+  font-weight: bold;
+  transform: translateY(16px);
+}
+
+.signal-label.entry {
+  color: hsl(var(--short-liquidation));
+}
+
+.signal-label.exit {
+  color: hsl(var(--long-liquidation));
+}
+
+.grid-line {
+  position: absolute;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.grid-line.horizontal {
+  left: 0;
+  width: 100%;
+  height: 1px;
+}
+
+.grid-line.vertical {
+  top: 0;
+  width: 1px;
+  height: 100%;
+}
+
+.grid-label {
+  position: absolute;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.grid-label.price {
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.grid-label.time {
+  bottom: -20px;
+  transform: translateX(-50%);
+}
+
+/* Crosshair styles */
+.crosshair-horizontal {
+  position: absolute;
+  left: 40px;
+  right: 0;
+  height: 1px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+  z-index: 30;
+}
+
+.crosshair-price-label {
+  position: absolute;
+  left: 0;
+  background-color: rgba(30, 37, 56, 0.9);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 31;
+}
+
+/* Crypto news item styles */
+.crypto-news-item {
+  position: relative;
+  background-color: rgba(18, 24, 38, 0.8);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.crypto-news-item:hover {
+  background-color: rgba(18, 24, 38, 1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  animation: subtle-shake 0.5s ease-in-out;
+}
+
+@keyframes subtle-shake {
+  0% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-2px);
+  }
+  40% {
+    transform: translateX(2px);
+  }
+  60% {
+    transform: translateX(-1px);
+  }
+  80% {
+    transform: translateX(1px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.crypto-news-item:active {
+  transform: scale(0.98);
+}
+
+/* For touch devices */
+@media (hover: none) {
+  .crypto-news-item:active {
+    background-color: rgba(18, 24, 38, 1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+}

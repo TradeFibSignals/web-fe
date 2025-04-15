@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "generate-signals": "ts-node scripts/generate-signals.ts"
+  }
+}
