@@ -120,45 +120,24 @@ class BinanceWebSocketService {
 // Create a singleton instance
 export const binanceWebSocket = new BinanceWebSocketService()
 
-// Constants for retry logic
-const RETRY_WAIT_TIME = 5000 // 5 second base wait time
-const MAX_RETRIES = 3 // Maximum number of retries per endpoint
-
-// Prioritized Binance API endpoints
-const BINANCE_ENDPOINTS = [
-  // Prioritize api3.binance.com first as it often works better for avoiding geo-restrictions
-  "https://api3.binance.com/api/v3",
-  "https://api.binance.com/api/v3",
-  "https://api1.binance.com/api/v3",
-  "https://api2.binance.com/api/v3",
-  "https://data-api.binance.vision/api/v3",
-  // Futures API endpoints
-  "https://fapi.binance.com/fapi/v1",
-  "https://dapi.binance.com/dapi/v1",
-]
-
 // Function to test different Binance endpoints and find the most reliable one
 export async function testBinanceEndpoints() {
-  // Define endpoints to test - prioritize api3.binance.com first
+  // Define endpoints to test - prioritize production endpoints
   const endpoints = [
-    {
-      name: "binance-api3-v3",
-      url: "https://api3.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1",
-    },
     {
       name: "binance-api-v3",
       url: "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1",
     },
     {
       name: "binance-spot-v3",
-      url: "https://api1.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1",
+      url: "https://api3.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1",
     },
     {
       name: "binance-futures-fapi-v1",
       url: "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1h&limit=1",
     },
     {
-      name: "binance-futures-dapi-v1", 
+      name: "binance-futures-dapi-v1", // Lowest priority
       url: "https://dapi.binance.com/dapi/v1/klines?symbol=BTCUSD_PERP&interval=1h&limit=1",
     }
   ];
@@ -170,14 +149,13 @@ export async function testBinanceEndpoints() {
 
   // Test each endpoint
   for (const endpoint of endpoints) {
-    const startTime = Date.now();
-    
     try {
+      const startTime = Date.now();
+      
       const response = await fetch(endpoint.url, {
         method: "GET",
         headers: {
           "User-Agent": "TradeFibSignals/1.0.0",
-          "Accept": "application/json"
         },
         timeout: 5000 // 5 second timeout
       });
@@ -226,7 +204,7 @@ export async function testBinanceEndpoints() {
 
   // If all endpoints failed, use the first one as default
   if (allFailed && Object.keys(endpointStats).length > 0) {
-    bestEndpoint = "binance-api3-v3"; // Default to api3 if all fail
+    bestEndpoint = endpoints[0].name;
   }
 
   return {
@@ -236,181 +214,73 @@ export async function testBinanceEndpoints() {
 }
 
 // Function to get the best Binance endpoint URL
-export function getBestBinanceEndpoint(): string {
-  // Default to api3.binance.com as it's often the most reliable
-  return "https://api3.binance.com/api/v3";
+export function getBestBinanceEndpoint(endpointName: string): string {
+  // Map endpoint names to base URLs
+  const endpointMap: Record<string, string> = {
+    "binance-api-v3": "https://api.binance.com",
+    "binance-spot-v3": "https://api3.binance.com",
+    "binance-futures-fapi-v1": "https://fapi.binance.com",
+    "binance-futures-dapi-v1": "https://dapi.binance.com"
+  };
+
+  // Return the base URL for the given endpoint name, or default to binance-api-v3
+  return endpointMap[endpointName] || "https://api.binance.com";
 }
 
-// Function to fetch available perpetual pairs from Binance with improved retry logic
+// Function to fetch available perpetual pairs from Binance
 export async function fetchAvailablePairs(): Promise<string[]> {
-  console.log("Fetching available pairs from Binance...");
-  
-  // Try multiple endpoints with retry logic
-  for (const baseEndpoint of BINANCE_ENDPOINTS) {
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        console.log(`Trying endpoint ${baseEndpoint} (attempt ${attempt + 1}/${MAX_RETRIES})...`);
-        
-        const endpoint = baseEndpoint.includes("fapi") || baseEndpoint.includes("dapi") 
-          ? `${baseEndpoint}/exchangeInfo` 
-          : `${baseEndpoint}/exchangeInfo`;
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
-        const response = await fetch(endpoint, {
-          headers: {
-            'User-Agent': 'TradeFibSignals/1.0.0',
-            'Accept': 'application/json'
-          },
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          const statusText = await response.text();
-          console.warn(`Endpoint ${baseEndpoint} failed: ${response.status} ${statusText}`);
-          continue;
-        }
-        
-        const data = await response.json();
-        
-        // Extract USDT perpetual pairs
-        const pairs = data.symbols
-          .filter(
-            (symbol: any) =>
-              symbol.status === "TRADING" && 
-              (symbol.quoteAsset === "USDT" || (symbol.contractType === "PERPETUAL" && symbol.quoteAsset === "USDT"))
-          )
-          .map((symbol: any) => symbol.symbol);
-        
-        console.log(`Successfully fetched ${pairs.length} pairs from ${baseEndpoint}`);
-        return pairs;
-      } catch (error) {
-        console.warn(`Error fetching pairs from ${baseEndpoint} (attempt ${attempt + 1}): ${error instanceof Error ? error.message : String(error)}`);
-        
-        if (attempt < MAX_RETRIES - 1) {
-          console.log(`Waiting ${RETRY_WAIT_TIME / 1000}s before retry...`);
-          await new Promise(resolve => setTimeout(resolve, RETRY_WAIT_TIME));
-        }
-      }
+  try {
+    // Try api3.binance.com first - this is often the most reliable for geo-restricted regions
+    let response = await fetch("https://api3.binance.com/api/v3/exchangeInfo", {
+      headers: {
+        'User-Agent': 'TradeFibSignals/1.0.0',
+      },
+      timeout: 10000
+    });
+
+    // If that fails, try the regular API endpoint
+    if (!response.ok) {
+      response = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+        },
+        timeout: 10000
+      });
     }
+
+    // If regular endpoint also fails, try the futures API
+    if (!response.ok) {
+      response = await fetch("https://fapi.binance.com/fapi/v1/exchangeInfo", {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+        },
+        timeout: 10000
+      });
+    }
+
+    const data = await response.json();
+    
+    if (!data || !data.symbols || !Array.isArray(data.symbols)) {
+      console.error("Invalid response format from Binance API:", data);
+      return [];
+    }
+
+    // Extract USDT perpetual pairs
+    const pairs = data.symbols
+      .filter(
+        (symbol: any) =>
+          symbol.status === "TRADING" && 
+          (symbol.quoteAsset === "USDT" || (symbol.contractType === "PERPETUAL" && symbol.quoteAsset === "USDT"))
+      )
+      .map((symbol: any) => symbol.symbol)
+
+    return pairs
+  } catch (error) {
+    console.error("Error fetching available pairs:", error)
+    return []
   }
-  
-  // Fallback to default pairs if all endpoints fail
-  console.warn("All endpoints failed when fetching pairs. Using default pairs.");
-  return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
 }
 
-// Improved function to fetch historical candles with multiple endpoints and retry logic
-export async function fetchTimeframeCandles(symbol: string, timeframe: string, limit = 20): Promise<CandleData[]> {
-  console.log(`Fetching ${limit} candles for ${symbol} on ${timeframe} timeframe...`);
-  
-  // Map timeframe to Binance interval format if needed
-  let interval: string;
-  switch (timeframe) {
-    case "1d":
-      interval = "1d";
-      break;
-    case "1M":
-      interval = "1M";
-      break;
-    default:
-      interval = timeframe;
-  }
-  
-  // Try multiple endpoints with retry logic
-  for (const baseEndpoint of BINANCE_ENDPOINTS) {
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        // Adjust endpoint for futures vs spot
-        const endpoint = baseEndpoint.includes("fapi") || baseEndpoint.includes("dapi") 
-          ? `${baseEndpoint}/klines` 
-          : `${baseEndpoint}/klines`;
-        
-        const url = `${endpoint}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        console.log(`Trying endpoint: ${url} (attempt ${attempt + 1}/${MAX_RETRIES})...`);
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
-        
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'TradeFibSignals/1.0.0',
-            'Accept': 'application/json'
-          },
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          const statusText = await response.text();
-          console.warn(`Endpoint ${url} failed: ${response.status} ${statusText}`);
-          
-          // If we get 451 Unavailable for Legal Reasons, quickly move to next endpoint
-          if (response.status === 451) {
-            console.warn(`Geo-restriction detected (451). Switching to next endpoint.`);
-            break; // Move to next endpoint immediately
-          }
-          
-          // For other errors, continue with retry logic
-          continue;
-        }
-        
-        const data = await response.json();
-        
-        // Validate data
-        if (!Array.isArray(data)) {
-          console.warn(`Invalid data format from ${url}: expected array, got ${typeof data}`);
-          continue;
-        }
-        
-        if (data.length === 0) {
-          console.warn(`Empty data array from ${url}`);
-          continue;
-        }
-        
-        // Convert to CandleData format
-        console.log(`Successfully fetched ${data.length} candles from ${url}`);
-        return data.map((kline: any) => ({
-          time: Number(kline[0]), // Open time
-          open: Number.parseFloat(kline[1]),
-          high: Number.parseFloat(kline[2]),
-          low: Number.parseFloat(kline[3]),
-          close: Number.parseFloat(kline[4]),
-          volume: Number.parseFloat(kline[5]), // Volume
-        }));
-      } catch (error) {
-        const isTimeout = error instanceof Error && error.name === 'AbortError';
-        console.warn(`Error fetching candles from ${baseEndpoint} (attempt ${attempt + 1}): ${error instanceof Error ? error.message : String(error)}`);
-        
-        if (isTimeout) {
-          console.warn(`Request timeout. Switching to next endpoint.`);
-          break; // Move to next endpoint immediately on timeout
-        }
-        
-        if (attempt < MAX_RETRIES - 1) {
-          const waitTime = RETRY_WAIT_TIME * Math.pow(1.5, attempt); // Exponential backoff
-          console.log(`Waiting ${waitTime / 1000}s before retry...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
-      }
-    }
-  }
-  
-  // If all endpoints fail, try with a smaller limit as a last resort
-  if (limit > 10) {
-    console.warn(`All endpoints failed. Trying with reduced limit (10 candles)...`);
-    return fetchTimeframeCandles(symbol, timeframe, 10);
-  }
-  
-  console.error(`Failed to fetch candles after trying all endpoints. Returning empty array.`);
-  return [];
-}
-
-// Improved function to fetch BinanceData with multiple endpoints
 export async function fetchBinanceData(
   timeframe: string,
   symbol = "BTCUSDT",
@@ -422,117 +292,156 @@ export async function fetchBinanceData(
   priceChangePercent: number
 }> {
   try {
-    console.log(`Fetching data for ${symbol} with timeframe ${timeframe}...`);
-    
-    // 1. Fetch current price and ticker data using multiple endpoints
-    let tickerData: any = null;
-    let currentPrice = 0;
-    let priceChangePercent = 0;
-    
-    // Try ticker endpoints
-    for (const baseEndpoint of BINANCE_ENDPOINTS) {
-      if (tickerData) break; // Stop if we already have ticker data
-      
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        try {
-          // Adjust endpoint for futures vs spot
-          const endpoint = baseEndpoint.includes("fapi") || baseEndpoint.includes("dapi") 
-            ? `${baseEndpoint}/ticker/24hr` 
-            : `${baseEndpoint}/ticker/24hr`;
-          
-          const url = `${endpoint}?symbol=${symbol}`;
-          console.log(`Trying ticker endpoint: ${url} (attempt ${attempt + 1}/${MAX_RETRIES})...`);
-          
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
-          
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'TradeFibSignals/1.0.0',
-              'Accept': 'application/json'
-            },
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
-          
-          if (!response.ok) {
-            if (response.status === 451) {
-              console.warn(`Geo-restriction detected. Switching to next endpoint.`);
-              break;
-            }
-            continue;
-          }
-          
-          tickerData = await response.json();
-          currentPrice = Number.parseFloat(tickerData.lastPrice);
-          priceChangePercent = Number.parseFloat(tickerData.priceChangePercent);
-          
-          console.log(`Successfully fetched ticker data from ${url}: price=${currentPrice}, change=${priceChangePercent}%`);
-          break;
-        } catch (error) {
-          console.warn(`Error fetching ticker from ${baseEndpoint} (attempt ${attempt + 1}): ${error instanceof Error ? error.message : String(error)}`);
-          
-          if (error instanceof Error && error.name === 'AbortError') {
-            break; // Move to next endpoint on timeout
-          }
-          
-          if (attempt < MAX_RETRIES - 1) {
-            await new Promise(resolve => setTimeout(resolve, RETRY_WAIT_TIME));
-          }
-        }
+    // Get current time and calculate start time (1 day ago)
+    const now = Date.now()
+    const oneDayAgo = now - 24 * 60 * 60 * 1000 // 1 day in milliseconds
+
+    // Fetch current price and 24h change - try api3.binance.com first
+    let tickerResponse = await fetch(`https://api3.binance.com/api/v3/ticker/24hr?symbol=${symbol}`, {
+      headers: {
+        'User-Agent': 'TradeFibSignals/1.0.0',
+      },
+      timeout: 10000
+    });
+
+    // If that fails, try regular endpoint
+    if (!tickerResponse.ok) {
+      tickerResponse = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`, {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+        },
+        timeout: 10000
+      });
+    }
+
+    // If that fails, try futures API
+    if (!tickerResponse.ok) {
+      tickerResponse = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol}`, {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+        },
+        timeout: 10000
+      });
+    }
+
+    const tickerData = await tickerResponse.json()
+    const currentPrice = Number.parseFloat(tickerData.lastPrice)
+    const priceChangePercent = Number.parseFloat(tickerData.priceChangePercent)
+
+    // Determine appropriate kline interval based on timeframe
+    // For each timeframe, we want enough data points to create a good chart
+    let interval: string
+    let limit: number
+
+    switch (timeframe) {
+      case "5m":
+        interval = "5m"
+        limit = 288 // 5 minutes × 288 = 1 day
+        break
+      case "15m":
+        interval = "15m"
+        limit = 96 // 15 minutes × 96 = 1 day
+        break
+      case "30m":
+        interval = "30m"
+        limit = 48 // 30 minutes × 48 = 1 day
+        break
+      case "1h":
+        interval = "1h"
+        limit = 24 // 1 hour × 24 = 1 day
+        break
+      default:
+        interval = "15m"
+        limit = 96
+    }
+
+    // Fetch kline/candlestick data for price chart - try api3.binance.com first
+    let klinesResponse = await fetch(
+      `https://api3.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${oneDayAgo}&limit=${limit}`,
+      {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+        },
+        timeout: 10000
       }
+    );
+
+    // If that fails, try regular endpoint
+    if (!klinesResponse.ok) {
+      klinesResponse = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${oneDayAgo}&limit=${limit}`,
+        {
+          headers: {
+            'User-Agent': 'TradeFibSignals/1.0.0',
+          },
+          timeout: 10000
+        }
+      );
     }
-    
-    // If we couldn't get ticker data, throw error
-    if (!tickerData) {
-      throw new Error(`Failed to fetch ticker data for ${symbol} after trying all endpoints.`);
+
+    // If that fails, try futures API
+    if (!klinesResponse.ok) {
+      klinesResponse = await fetch(
+        `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${oneDayAgo}&limit=${limit}`,
+        {
+          headers: {
+            'User-Agent': 'TradeFibSignals/1.0.0',
+          },
+          timeout: 10000
+        }
+      );
     }
-    
-    // 2. Fetch historical candles
-    // We'll use the improved fetchTimeframeCandles function
-    const candles = await fetchTimeframeCandles(symbol, timeframe, 50);
-    
-    if (candles.length === 0) {
-      throw new Error(`Failed to fetch historical candles for ${symbol} after trying all endpoints.`);
-    }
-    
-    // Format price data for chart
-    const priceData = candles.map(candle => ({
-      time: candle.time,
-      price: candle.close
-    }));
-    
+
+    const klinesData = await klinesResponse.json()
+
+    const priceData: { time: number; price: number }[] = klinesData.map((kline: any) => ({
+      time: kline[0], // Open time
+      price: Number.parseFloat(kline[4]), // Close price
+    }))
+
     // If we only need price data, return early
     if (priceDataOnly) {
       return {
-        liquidationData: [],
+        liquidationData: [], // Empty array as we're not generating new liquidation data
         priceData,
         currentPrice,
         priceChangePercent,
-      };
+      }
     }
-    
-    // 3. Generate liquidation data
-    // Since Binance doesn't provide liquidation data in public API, we'll generate synthetic data
+
+    // Generate liquidation data based on real price levels
+    // Since Binance doesn't provide a public API for liquidation data,
+    // we'll generate synthetic data but based on real price ranges
+
+    // Find min and max price from real data
+    const prices = priceData.map((d) => d.price)
+    const minPrice = Math.min(...prices)
+    const maxPrice = Math.max(...prices)
+
+    // Calculate price range for liquidation levels
+    const priceRange = maxPrice - minPrice
+    const longLiquidationCenter = currentPrice * 0.95 // 5% below current price
+    const shortLiquidationCenter = currentPrice * 1.05 // 5% above current price
+
+    // Generate liquidation data with consistent seed for the same symbol and timeframe
     const liquidationData = generateLiquidationData(
       priceData,
       currentPrice,
-      currentPrice * 0.95, // Long liquidation center (5% below current price)
-      currentPrice * 1.05, // Short liquidation center (5% above current price)
+      longLiquidationCenter,
+      shortLiquidationCenter,
       symbol,
-      timeframe
-    );
-    
+      timeframe,
+    )
+
     return {
       liquidationData,
       priceData,
       currentPrice,
       priceChangePercent,
-    };
+    }
   } catch (error) {
-    console.error(`Error fetching data for ${symbol}:`, error);
-    throw error;
+    console.error(`Error fetching data for ${symbol} from Binance:`, error)
+    throw error
   }
 }
 
@@ -623,7 +532,207 @@ function generateLiquidationData(
   return liquidationData
 }
 
-// Improved function to fetch historical candle data
+// Updated fetchTimeframeCandles to prioritize api3.binance.com and handle errors better
+export async function fetchTimeframeCandles(symbol: string, timeframe: string, limit = 20): Promise<CandleData[]> {
+  // Track retries
+  let retries = 0;
+  const maxRetries = 3;
+  const retryDelay = 1000; // ms
+  
+  while (retries <= maxRetries) {
+    try {
+      // Map timeframe to Binance interval format
+      let interval: string
+      switch (timeframe) {
+        case "1d":
+          interval = "1d"
+          break
+        case "1M":
+          interval = "1M"
+          break
+        default:
+          interval = timeframe
+      }
+
+      // Log each attempt for debugging
+      console.log(`Fetching candles for ${symbol} on ${timeframe} (${interval}), attempt ${retries + 1}/${maxRetries + 1}`)
+      
+      // Try api3.binance.com first (this is the most reliable for avoiding geo-restrictions)
+      let url = `https://api3.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      console.log(`Requesting URL: ${url}`);
+      
+      let response = await fetch(url, {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000 // 10 seconds timeout
+      });
+      
+      // If api3 endpoint fails, try regular API
+      if (!response.ok) {
+        console.log(`API3 endpoint failed with status ${response.status}, trying regular API as fallback`);
+        url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+        console.log(`Requesting URL: ${url}`);
+        
+        response = await fetch(url, {
+          headers: {
+            'User-Agent': 'TradeFibSignals/1.0.0',
+            'Accept': 'application/json'
+          },
+          timeout: 10000 // 10 seconds timeout
+        });
+      }
+      
+      // If regular API fails, try futures API
+      if (!response.ok) {
+        console.log(`Regular API failed with status ${response.status}, trying futures API as fallback`);
+        url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+        console.log(`Requesting URL: ${url}`);
+        
+        response = await fetch(url, {
+          headers: {
+            'User-Agent': 'TradeFibSignals/1.0.0',
+            'Accept': 'application/json'
+          },
+          timeout: 10000 // 10 seconds timeout
+        });
+      }
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch ${timeframe} candles: ${response.status} - ${errorText}`)
+      }
+
+      const data = await response.json()
+
+      // Additional validation of data format
+      if (!Array.isArray(data)) {
+        console.error(`Invalid data format - expected array but got:`, typeof data);
+        console.error(`Response preview:`, JSON.stringify(data).substring(0, 200));
+        throw new Error(`Invalid response format for ${symbol}: expected array, got ${typeof data}`);
+      }
+      
+      if (data.length === 0) {
+        console.warn(`Warning: Received empty array of candles for ${symbol}`);
+        return [];
+      }
+
+      // Validate first candle format
+      const firstCandle = data[0];
+      if (!Array.isArray(firstCandle) || firstCandle.length < 6) {
+        console.error(`Invalid candle format: ${JSON.stringify(firstCandle)}`);
+        throw new Error(`Invalid candle format for ${symbol}`);
+      }
+
+      // Log successful request
+      console.log(`Successfully fetched ${data.length} candles for ${symbol} on ${timeframe}`);
+
+      // Convert to CandleData format
+      return data.map((kline: any) => ({
+        time: Number(kline[0]), // Open time
+        open: Number.parseFloat(kline[1]),
+        high: Number.parseFloat(kline[2]),
+        low: Number.parseFloat(kline[3]),
+        close: Number.parseFloat(kline[4]),
+        volume: Number.parseFloat(kline[5]), // Volume
+      }))
+    } catch (error) {
+      console.error(`Error fetching ${timeframe} candles for ${symbol} (attempt ${retries + 1}):`, error)
+      
+      retries++;
+      if (retries <= maxRetries) {
+        // Exponential backoff
+        const delay = retryDelay * Math.pow(2, retries - 1);
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error(`All retry attempts failed for ${symbol}`);
+        return [];
+      }
+    }
+  }
+  
+  return []; // Fallback if all retries fail
+}
+
+// Function to get historical high/low values
+export async function getHighLowSinceTimestamp(
+  symbol: string,
+  startTime: number,
+): Promise<{ high: number; low: number }> {
+  try {
+    // Get 1-minute candles from startTime to now
+    // Use a smaller interval to capture short-term price spikes
+    
+    // Try api3.binance.com first
+    let url = `https://api3.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&startTime=${startTime}&limit=1000`
+
+    let response = await fetch(url, {
+      headers: {
+        'User-Agent': 'TradeFibSignals/1.0.0',
+        'Accept': 'application/json'
+      },
+      timeout: 10000 // 10 seconds timeout
+    });
+    
+    // If api3 endpoint fails, try regular API
+    if (!response.ok) {
+      url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&startTime=${startTime}&limit=1000`
+      
+      response = await fetch(url, {
+        headers: {
+          'User-Agent': 'TradeFibSignals/1.0.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000 // 10 seconds timeout
+      });
+    }
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch historical data: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+
+    // Process data
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      console.warn("No historical data received")
+      return { high: 0, low: Number.MAX_SAFE_INTEGER }
+    }
+
+    // Find highest high and lowest low from all candles
+    let highestPrice = 0
+    let lowestPrice = Number.MAX_SAFE_INTEGER
+
+    for (const candle of data) {
+      const high = Number.parseFloat(candle[2]) // high is at index 2
+      const low = Number.parseFloat(candle[3]) // low is at index 3
+
+      if (high > highestPrice) {
+        highestPrice = high
+      }
+
+      if (low < lowestPrice) {
+        lowestPrice = low
+      }
+    }
+
+    console.log(
+      `Historical price range since ${new Date(startTime).toISOString()}: High: ${highestPrice}, Low: ${lowestPrice}`,
+    )
+
+    return {
+      high: highestPrice,
+      low: lowestPrice,
+    }
+  } catch (error) {
+    console.error("Error fetching historical high/low:", error)
+    return { high: 0, low: Number.MAX_SAFE_INTEGER }
+  }
+}
+
+// Add function to fetch candlestick data with more resilient error handling
 export async function fetchCandlestickData(
   symbol: string,
   timeframe: string,
@@ -632,18 +741,24 @@ export async function fetchCandlestickData(
   try {
     console.log(`Fetching candlestick data for ${symbol} on ${timeframe} timeframe, limit: ${limit}`);
     
-    // Use fetchTimeframeCandles with robust retry and fallback logic
+    // Use existing fetchTimeframeCandles function with production endpoints prioritized
     const candles = await fetchTimeframeCandles(symbol, timeframe, limit);
     
-    // If we couldn't get enough candles, try with a smaller limit
-    if (candles.length < Math.min(10, limit) && limit > 50) {
-      console.log(`Received only ${candles.length} candles. Trying with reduced limit (50).`);
-      return await fetchTimeframeCandles(symbol, timeframe, 50);
+    // Additional validation
+    if (!candles || candles.length === 0) {
+      console.warn(`No candlestick data returned for ${symbol} on ${timeframe}`);
+      
+      // Try with a smaller limit as fallback (Binance can sometimes reject large limit values)
+      if (limit > 50) {
+        console.log(`Retrying with reduced limit (50) for ${symbol}...`);
+        return await fetchTimeframeCandles(symbol, timeframe, 50);
+      }
     }
     
     return candles;
   } catch (error) {
     console.error(`Error fetching candlestick data for ${symbol}:`, error);
+    // Instead of throwing, return empty array - this makes signal generation more resilient
     return [];
   }
 }
