@@ -402,14 +402,24 @@ export async function generateSignalsForTimeframe(timeframe: string, supabase: S
       // Get candlestick data from Binance API
       let candlestickData
       try {
-        candlestickData = await fetchTimeframeCandles(pair, timeframe, 100)
+        // Use fetchCandlestickData with more extensive error handling
+        // and fallback mechanisms already built in
+        console.log(`Fetching candlestick data for ${pair} with limit 100...`);
+        candlestickData = await fetchCandlestickData(pair, timeframe, 100)
         
-        // Add debugging to help diagnose issues
+        // Log success or fallback to a smaller dataset if needed
         console.log(`Received candlestick data for ${pair}: count=${candlestickData?.length || 0}`)
         
-        // Check if we received valid data
+        // If still no data after retries and fallbacks, try with a smaller dataset
         if (!candlestickData || !Array.isArray(candlestickData) || candlestickData.length === 0) {
-          throw new Error("Invalid or empty candlestick data received")
+          console.log(`Trying with a smaller dataset (limit=20) for ${pair}...`);
+          candlestickData = await fetchTimeframeCandles(pair, timeframe, 20);
+          console.log(`Second attempt result: received ${candlestickData?.length || 0} candles`);
+        }
+        
+        // Final check if we have valid data
+        if (!candlestickData || !Array.isArray(candlestickData) || candlestickData.length === 0) {
+          throw new Error("Invalid or empty candlestick data received after all fallback attempts")
         }
       } catch (fetchError) {
         console.error(`Error fetching candlestick data for ${pair}:`, fetchError)

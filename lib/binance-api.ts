@@ -334,104 +334,113 @@ function generateLiquidationData(
   return liquidationData
 }
 
-// Function to convert candle data to CandleData format for the chart
-export async function fetchHistoricalCandles(
-  symbol: string,
-  timeframe: string,
-  days = 1,
-): Promise<CandleData[]> {
-  try {
-    const now = Date.now()
-    const startTime = now - days * 24 * 60 * 60 * 1000 // X days ago
-
-    // Determine appropriate kline interval and limit
-    let interval: string
-    let limit: number
-
-    switch (timeframe) {
-      case "5m":
-        interval = "5m"
-        limit = 288 * days // 5 minutes × 288 = 1 day
-        break
-      case "15m":
-        interval = "15m"
-        limit = 96 * days // 15 minutes × 96 = 1 day
-        break
-      case "30m":
-        interval = "30m"
-        limit = 48 * days // 30 minutes × 48 = 1 day
-        break
-      case "1h":
-        interval = "1h"
-        limit = 24 * days // 1 hour × 24 = 1 day
-        break
-      default:
-        interval = "15m"
-        limit = 96 * days
-    }
-
-    // Limit to maximum allowed by Binance API
-    limit = Math.min(limit, 1000)
-
-    const response = await fetch(
-      `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&limit=${limit}`,
-    )
-    const data = await response.json()
-
-    // Convert to CandleData format
-    return data.map((kline: any) => ({
-      time: kline[0], // Open time
-      open: Number.parseFloat(kline[1]),
-      high: Number.parseFloat(kline[2]),
-      low: Number.parseFloat(kline[3]),
-      close: Number.parseFloat(kline[4]),
-      volume: Number.parseFloat(kline[5]), // Volume
-    }))
-  } catch (error) {
-    console.error(`Error fetching historical candles for ${symbol}:`, error)
-    return []
-  }
-}
-
 // Add this function to fetch candles for different timeframes
 export async function fetchTimeframeCandles(symbol: string, timeframe: string, limit = 20): Promise<CandleData[]> {
-  try {
-    // Map timeframe to Binance interval format
-    let interval: string
-    switch (timeframe) {
-      case "1d":
-        interval = "1d"
-        break
-      case "1M":
-        interval = "1M"
-        break
-      default:
-        interval = timeframe
+  // Track retries
+  let retries = 0;
+  const maxRetries = 3;
+  const retryDelay = 1000; // ms
+  
+  while (retries <= maxRetries) {
+    try {
+      // Map timeframe to Binance interval format
+      let interval: string
+      switch (timeframe) {
+        case "1d":
+          interval = "1d"
+          break
+        case "1M":
+          interval = "1M"
+          break
+        default:
+          interval = timeframe
+      }
+
+      // Log each attempt for debugging
+      console.log(`Fetching candles for ${symbol} on ${timeframe} (${interval}), attempt ${retries + 1}/${maxRetries + 1}`)
+      
+      // Try futures API first
+      let url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      console.log(`Requesting URL: ${url}`);
+      
+      let response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Trade-Fib-Signals/1.0.0',
+          'Accept': 'application/json'
+        },
+        timeout: 10000 // 10 seconds timeout
+      });
+      
+      // If futures API fails, try spot API
+      if (!response.ok) {
+        console.log(`Futures API failed with status ${response.status}, trying spot API as fallback`);
+        url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+        console.log(`Requesting URL: ${url}`);
+        
+        response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Trade-Fib-Signals/1.0.0',
+            'Accept': 'application/json'
+          },
+          timeout: 10000 // 10 seconds timeout
+        });
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch ${timeframe} candles: ${response.status} - ${errorText}`)
+      }
+
+      const data = await response.json()
+
+      // Additional validation of data format
+      if (!Array.isArray(data)) {
+        console.error(`Invalid data format - expected array but got:`, typeof data);
+        console.error(`Response preview:`, JSON.stringify(data).substring(0, 200));
+        throw new Error(`Invalid response format for ${symbol}: expected array, got ${typeof data}`);
+      }
+      
+      if (data.length === 0) {
+        console.warn(`Warning: Received empty array of candles for ${symbol}`);
+        return [];
+      }
+
+      // Validate first candle format
+      const firstCandle = data[0];
+      if (!Array.isArray(firstCandle) || firstCandle.length < 6) {
+        console.error(`Invalid candle format: ${JSON.stringify(firstCandle)}`);
+        throw new Error(`Invalid candle format for ${symbol}`);
+      }
+
+      // Log successful request
+      console.log(`Successfully fetched ${data.length} candles for ${symbol} on ${timeframe}`);
+
+      // Convert to CandleData format
+      return data.map((kline: any) => ({
+        time: Number(kline[0]), // Open time
+        open: Number.parseFloat(kline[1]),
+        high: Number.parseFloat(kline[2]),
+        low: Number.parseFloat(kline[3]),
+        close: Number.parseFloat(kline[4]),
+        volume: Number.parseFloat(kline[5]), // Volume
+      }))
+    } catch (error) {
+      console.error(`Error fetching ${timeframe} candles for ${symbol} (attempt ${retries + 1}):`, error)
+      
+      retries++;
+      if (retries <= maxRetries) {
+        // Exponential backoff
+        const delay = retryDelay * Math.pow(2, retries - 1);
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error(`All retry attempts failed for ${symbol}`);
+        return [];
+      }
     }
-
-    const response = await fetch(
-      `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-    )
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ${timeframe} candles: ${response.status}`)
-    }
-
-    const data = await response.json()
-
-    // Convert to CandleData format
-    return data.map((kline: any) => ({
-      time: kline[0], // Open time
-      open: Number.parseFloat(kline[1]),
-      high: Number.parseFloat(kline[2]),
-      low: Number.parseFloat(kline[3]),
-      close: Number.parseFloat(kline[4]),
-      volume: Number.parseFloat(kline[5]), // Volume
-    }))
-  } catch (error) {
-    console.error(`Error fetching ${timeframe} candles for ${symbol}:`, error)
-    return []
   }
+  
+  return []; // Fallback if all retries fail
 }
 
 // Function to get historical high/low values
@@ -498,9 +507,23 @@ export async function fetchCandlestickData(
     console.log(`Fetching candlestick data for ${symbol} on ${timeframe} timeframe, limit: ${limit}`);
     
     // Use existing fetchTimeframeCandles function
-    return await fetchTimeframeCandles(symbol, timeframe, limit);
+    const candles = await fetchTimeframeCandles(symbol, timeframe, limit);
+    
+    // Additional validation
+    if (!candles || candles.length === 0) {
+      console.warn(`No candlestick data returned for ${symbol} on ${timeframe}`);
+      
+      // Try with a smaller limit as fallback (Binance can sometimes reject large limit values)
+      if (limit > 50) {
+        console.log(`Retrying with reduced limit (50) for ${symbol}...`);
+        return await fetchTimeframeCandles(symbol, timeframe, 50);
+      }
+    }
+    
+    return candles;
   } catch (error) {
     console.error(`Error fetching candlestick data for ${symbol}:`, error);
-    throw error;
+    // Instead of throwing, return empty array - this makes signal generation more resilient
+    return [];
   }
 }
