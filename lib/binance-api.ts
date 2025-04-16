@@ -290,7 +290,7 @@ export async function fetchKlines(
     // First try our internal API
     try {
       // Build URL with proper parameters for historical data
-      let url = `/api/klines?symbol=${normalizedSymbol}&interval=${interval}&limit=${limit}`;
+      let url = `${API_BASE_URL}/api/klines?symbol=${normalizedSymbol}&interval=${interval}&limit=${limit}`;
 
       // Add end time if provided
       if (endTime) {
