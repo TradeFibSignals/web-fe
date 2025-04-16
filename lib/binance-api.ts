@@ -35,11 +35,16 @@ export interface TickerData {
 
 // API endpoints to try in order of preference
 const BINANCE_ENDPOINTS = [
+  // Prioritize futures endpoints first
+  { name: 'binance-futures-fapi-v1', url: 'https://fapi.binance.com/fapi/v1' },
+  { name: 'binance-futures-fapi-v1-backup', url: 'https://fapi1.binance.com/fapi/v1' },
+  { name: 'binance-futures-fapi-v1-backup2', url: 'https://fapi2.binance.com/fapi/v1' },
+  { name: 'binance-futures-fapi-v1-backup3', url: 'https://fapi3.binance.com/fapi/v1' },
+  // Keep spot endpoints as fallbacks, but with lower priority
   { name: 'binance-api-v3', url: 'https://api.binance.com/api/v3' },
   { name: 'binance-spot-v3', url: 'https://api1.binance.com/api/v3' },
   { name: 'binance-api-eu', url: 'https://api-eu.binance.com/api/v3' },
   { name: 'binance-api-tr', url: 'https://api-tr.binance.com/api/v3' },
-  { name: 'binance-futures-fapi-v1', url: 'https://fapi.binance.com/fapi/v1' },
   { name: 'binance-futures-dapi-v1', url: 'https://dapi.binance.com/dapi/v1' }
 ];
 
@@ -120,11 +125,17 @@ async function findWorkingBinanceEndpoint(): Promise<string | null> {
         return new Promise<void>(async resolve => {
           const startTime = Date.now();
           try {
-            // Test the endpoint with a simple BTC price query
+            // Test the endpoint with a request that's appropriate for the endpoint type
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CONFIG.ENDPOINT_TEST_TIMEOUT);
-
-            const response = await fetch(`${endpoint.url}/ticker/price?symbol=BTCUSDT`, {
+            
+            // Use different test endpoints for spot vs futures
+            const isSpotEndpoint = endpoint.url.includes('/api/v3');
+            const testUrl = isSpotEndpoint 
+              ? `${endpoint.url}/ticker/price?symbol=BTCUSDT` 
+              : `${endpoint.url}/ticker/price?symbol=BTCUSDT`;
+              
+            const response = await fetch(testUrl, {
               signal: controller.signal,
               headers: {
                 'Accept': 'application/json',
@@ -265,6 +276,96 @@ const safeStorage = {
   }
 };
 
+// Function to test all Binance endpoints and find the most reliable ones
+export async function testBinanceEndpoints() {
+  console.log('Testing all Binance endpoints...');
+  
+  const endpointStats: Record<string, { 
+    success: boolean, 
+    responseTime: number | null,
+    error?: string 
+  }> = {};
+  
+  // Test all endpoints
+  for (const endpoint of BINANCE_ENDPOINTS) {
+    try {
+      console.log(`Testing endpoint: ${endpoint.name} (${endpoint.url})`);
+      
+      const startTime = Date.now();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      
+      // Use different test paths based on endpoint type
+      const isFuturesEndpoint = endpoint.url.includes('/fapi/v1');
+      const testPath = isFuturesEndpoint ? '/time' : '/time';
+      
+      const response = await fetch(`${endpoint.url}${testPath}`, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const responseTime = Date.now() - startTime;
+        
+        console.log(`✅ Endpoint ${endpoint.name} responded in ${responseTime}ms`);
+        endpointStats[endpoint.name] = { 
+          success: true, 
+          responseTime 
+        };
+        
+        // Store this working endpoint
+        workingEndpoints.set(endpoint.name, {
+          url: endpoint.url,
+          lastTested: Date.now(),
+          responseTime
+        });
+      } else {
+        console.log(`❌ Endpoint ${endpoint.name} returned status ${response.status}`);
+        endpointStats[endpoint.name] = { 
+          success: false, 
+          responseTime: null,
+          error: `HTTP ${response.status}` 
+        };
+      }
+    } catch (error) {
+      console.log(`❌ Endpoint ${endpoint.name} failed: ${error instanceof Error ? error.message : String(error)}`);
+      endpointStats[endpoint.name] = { 
+        success: false, 
+        responseTime: null,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+  
+  // Find the best endpoint
+  let bestEndpointName: string | null = null;
+  let bestResponseTime = Infinity;
+  
+  Object.entries(endpointStats).forEach(([name, stats]) => {
+    if (stats.success && stats.responseTime && stats.responseTime < bestResponseTime) {
+      bestResponseTime = stats.responseTime;
+      bestEndpointName = name;
+    }
+  });
+  
+  // Get the URL for the best endpoint
+  const bestEndpoint = bestEndpointName 
+    ? BINANCE_ENDPOINTS.find(e => e.name === bestEndpointName)?.url || null 
+    : null;
+  
+  return {
+    bestEndpoint,
+    endpointStats
+  };
+}
+
 // Fetch klines with error handling and fallback options
 export async function fetchKlines(
   interval: string,
@@ -315,8 +416,13 @@ export async function fetchKlines(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       
-      // Make the request
-      const response = await fetch(`${binanceEndpoint}/klines?${params.toString()}`, {
+      // Make the request - use the correct path based on whether it's a spot or futures endpoint
+      // For futures endpoints, use /klines directly as the endpoint URL already contains /fapi/v1 
+      // For spot endpoints, we need to add /klines to the path
+      const url = `${binanceEndpoint}/klines?${params.toString()}`;
+      console.log(`Making request to: ${url}`);
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
@@ -373,28 +479,11 @@ export async function fetchKlines(
       
     } catch (binanceError) {
       console.error('Error fetching directly from Binance:', binanceError instanceof Error ? binanceError.message : String(binanceError));
-      
-      // Pokud vaše původní funkce obsahuje část pro generování mock dat, ponechte ji zde
-      // Jinak můžete vyhodit výjimku
-      
-      // Vyhodit výjimku nebo použít mockup data v závislosti na vaší původní implementaci
-      if (typeof generateHistoricalMockCandles === 'function') {
-        console.warn(`Falling back to mock data for ${symbol} ${interval}`);
-        return generateHistoricalMockCandles(interval, limit, symbol, endTime);
-      } else {
-        throw new Error(`Failed to fetch data for ${symbol}`);
-      }
+      throw new Error(`Failed to fetch data for ${symbol}`);
     }
   } catch (error) {
     console.error("Error fetching klines:", error instanceof Error ? error.message : String(error));
-    
-    // Vyhodit výjimku nebo použít mockup data v závislosti na vaší původní implementaci
-    if (typeof generateHistoricalMockCandles === 'function') {
-      console.warn(`Falling back to mock data for ${symbol} ${interval}`);
-      return generateHistoricalMockCandles(interval, limit, symbol, endTime);
-    } else {
-      throw error;
-    }
+    throw error;
   }
 }
 
@@ -668,7 +757,7 @@ export function createTickerWebSocket(
 
   const connect = () => {
     try {
-      // Create WebSocket connection
+      // Use the futures WebSocket endpoint
       socket = new WebSocket(`wss://fstream.binance.com/ws/${symbolPair}@ticker`);
 
       socket.onopen = () => {
@@ -818,7 +907,6 @@ export function createKlineWebSocket(
           }, delay);
         } else {
           console.log("Maximum reconnection attempts reached. Not retrying further.");
-          // No fallback to mock data - just inform about the failure
         }
       };
     } catch (error) {
@@ -830,4 +918,36 @@ export function createKlineWebSocket(
   };
 
   return connect();
+}
+
+// Function for fetching historical candles with specialized error handling
+export async function fetchTimeframeCandles(
+  symbol = "BTCUSDT",
+  timeframe = "15m",
+  limit = 100
+): Promise<CandleData[]> {
+  // Convert timeframe to interval for Binance API
+  const interval = timeframeToInterval(timeframe);
+  
+  try {
+    // Use the previously implemented fetchKlines function
+    return await fetchKlines(interval, limit, undefined, symbol);
+  } catch (error) {
+    console.error(`Error fetching candles for ${symbol} ${timeframe}:`, error);
+    throw error;
+  }
+}
+
+// Function for fetching candlestick data with robust error handling
+export async function fetchCandlestickData(
+  symbol: string,
+  timeframe: string,
+  limit = 100
+): Promise<CandleData[]> {
+  try {
+    return await fetchTimeframeCandles(symbol, timeframe, limit);
+  } catch (error) {
+    console.error(`Error in fetchCandlestickData for ${symbol} ${timeframe}:`, error);
+    throw error;
+  }
 }
