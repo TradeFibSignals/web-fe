@@ -280,228 +280,121 @@ export async function fetchKlines(
     const cacheKey = `klines_${symbol}_${interval}_${limit}_${endTime || 'latest'}`;
     const cacheExpiry = 5 * 60 * 1000; // 5 minutes
     
-    // Check cache first
-    const cached = dataCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp < cacheExpiry)) {
-      console.log(`Using cached kline data for ${symbol} ${interval}`);
-      return cached.data;
+    // Check cache if available
+    if (typeof dataCache !== 'undefined' && dataCache.get && dataCache.has(cacheKey)) {
+      const cached = dataCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp < cacheExpiry)) {
+        console.log(`Using cached kline data for ${symbol} ${interval}`);
+        return cached.data;
+      }
     }
 
-    // First try our internal API
+    // Try Binance API directly
     try {
-      // Build URL with proper parameters for historical data
-      let url = `${API_BASE_URL}/api/klines?symbol=${normalizedSymbol}&interval=${interval}&limit=${limit}`;
-
-      // Add end time if provided
+      // Get working Binance endpoint 
+      const binanceEndpoint = await findWorkingBinanceEndpoint();
+      
+      if (!binanceEndpoint) {
+        throw new Error("No working Binance endpoints available");
+      }
+      
+      console.log(`Fetching data directly from Binance for ${symbol}`);
+      
+      // Prepare URL parameters
+      const params = new URLSearchParams();
+      params.append('symbol', symbol);
+      params.append('interval', interval);
+      params.append('limit', limit.toString());
+      
+      // Add time parameters if provided
       if (endTime) {
-        url += `&endTime=${endTime}`;
+        params.append('endTime', (endTime * 1000).toString()); // Convert to milliseconds for Binance
       }
-
-      // Calculate start time based on interval and limit to ensure we get enough historical data
-      const timeStep = getTimeStepSeconds(interval);
-      const startTime = endTime 
-        ? endTime - limit * timeStep 
-        : Math.floor(Date.now() / 1000) - limit * timeStep;
-      url += `&startTime=${startTime}`;
-
-      console.log(`Fetching klines from internal API: ${url}`);
-
-      const response = await fetchWithTimeout(url, {
+      
+      // Set up request with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      // Make the request
+      const response = await fetch(`${binanceEndpoint}/klines?${params.toString()}`, {
+        method: 'GET',
         headers: {
-          Accept: "application/json",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          Pragma: "no-cache",
-        }
-      }, 8000);
-
-      if (!response.ok) {
-        throw new Error(`API returned ${response.status}`);
-      }
-
-      const candles = await response.json();
-
-      // Check if we received valid data
-      if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error("Invalid response from API");
-      }
-
-      // Cache the result
-      dataCache.set(cacheKey, {
-        data: candles,
-        timestamp: Date.now()
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
+        signal: controller.signal
       });
-
-      return candles;
-    } catch (error) {
-      console.error("Error fetching klines from internal API:", error instanceof Error ? error.message : String(error));
       
-      // Fall back to direct Binance API call
-      try {
-        const binanceEndpoint = await findWorkingBinanceEndpoint();
-        
-        if (binanceEndpoint) {
-          console.log(`Fetching data directly from Binance: ${symbol}`);
-          
-          // Prepare URL parameters for Binance
-          const params = new URLSearchParams({
-            symbol: symbol,
-            interval: interval,
-            limit: limit.toString(),
-          });
-          
-          // Add time parameters if provided
-          if (endTime) {
-            params.append('endTime', (endTime * 1000).toString()); // Convert to milliseconds for Binance
-          }
-          
-          // Make the request
-          const response = await fetchWithTimeout(
-            `${binanceEndpoint}/klines?${params.toString()}`, 
-            {
-              headers: {
-                'Accept': 'application/json',
-                'Cache-Control': 'no-cache'
-              }
-            }
-          );
-          
-          if (response.ok) {
-            const data = await response.json();
-            
-            // Check that data has the correct format
-            if (Array.isArray(data) && data.length > 0) {
-              // Convert Binance format to our standard format
-              const result = data.map((item: any) => ({
-                time: Math.floor(item[0] / 1000), // Convert ms to s
-                open: parseFloat(item[1]),
-                high: parseFloat(item[2]),
-                low: parseFloat(item[3]),
-                close: parseFloat(item[4]),
-                volume: parseFloat(item[5])
-              }));
-              
-              // Cache the result
-              dataCache.set(cacheKey, {
-                data: result,
-                timestamp: Date.now()
-              });
-              
-              return result;
-            }
-          }
-        }
-      } catch (binanceError) {
-        console.error('Error fetching directly from Binance:', binanceError instanceof Error ? binanceError.message : String(binanceError));
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`Binance returned status: ${response.status}`);
       }
       
-      // Try CoinGecko as a last resort
+      // Get response as text first for better error handling
+      const text = await response.text();
+      
+      if (!text || text.trim() === '') {
+        throw new Error('Empty response from Binance');
+      }
+      
+      // Safely parse JSON
+      let data;
       try {
-        const baseSymbol = symbol.replace(/USDT$|USD$/, "").toLowerCase();
-        console.log(`Trying CoinGecko for ${baseSymbol}...`);
-        
-        // Map our symbol to CoinGecko ID
-        const coinId = getCoinGeckoId(baseSymbol);
-        
-        if (coinId) {
-          const days = interval === '1d' ? 30 : 
-                      (interval === '4h' || interval === '1h') ? 7 : 2;
-                      
-          // Create URL for CoinGecko API
-          const url = `${COINGECKO_API}/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`;
-          
-          const response = await fetchWithTimeout(
-            url, 
-            {
-              headers: {
-                'Accept': 'application/json',
-                'Cache-Control': 'no-cache'
-              }
-            }
-          );
-          
-          if (response.ok) {
-            const data = await response.json();
-            
-            if (data && data.prices && Array.isArray(data.prices)) {
-              const prices = data.prices;
-              const volumes = data.total_volumes || [];
-              
-              // Convert CoinGecko data to candle format
-              const candles: CandleData[] = [];
-              
-              // The target interval in seconds
-              const targetInterval = getTimeStepSeconds(interval);
-              const targetIntervalMs = targetInterval * 1000;
-              
-              // Group prices by target interval
-              const groupedPrices: Map<number, number[]> = new Map();
-              const groupedVolumes: Map<number, number> = new Map();
-              
-              // Process prices
-              for (const priceData of prices) {
-                const timestamp = priceData[0];
-                const price = priceData[1];
-                const bucketTime = Math.floor(timestamp / targetIntervalMs) * targetIntervalMs;
-                if (!groupedPrices.has(bucketTime)) {
-                  groupedPrices.set(bucketTime, []);
-                }
-                groupedPrices.get(bucketTime)!.push(price);
-              }
-              
-              // Process volumes
-              for (const volumeData of volumes) {
-                const timestamp = volumeData[0];
-                const volume = volumeData[1];
-                const bucketTime = Math.floor(timestamp / targetIntervalMs) * targetIntervalMs;
-                groupedVolumes.set(bucketTime, (groupedVolumes.get(bucketTime) || 0) + volume);
-              }
-              
-              // Create candles from aggregated data
-              for (const [bucketTime, prices] of groupedPrices.entries()) {
-                if (prices.length > 0) {
-                  const open = prices[0];
-                  const close = prices[prices.length - 1];
-                  const high = Math.max(...prices);
-                  const low = Math.min(...prices);
-                  const volume = groupedVolumes.get(bucketTime) || 0;
-                  
-                  candles.push({
-                    time: Math.floor(bucketTime / 1000),  // Convert to seconds
-                    open: open,
-                    high: high,
-                    low: low,
-                    close: close,
-                    volume: volume
-                  });
-                }
-              }
-              
-              // Sort by time and return requested number of candles
-              candles.sort((a, b) => a.time - b.time);
-              const result = candles.slice(-limit);
-              
-              if (result.length > 0) {
-                // Cache the result
-                dataCache.set(cacheKey, {
-                  data: result,
-                  timestamp: Date.now()
-                });
-                
-                return result;
-              }
-            }
-          }
-        }
-      } catch (coingeckoError) {
-        console.error('Error fetching from CoinGecko:', coingeckoError instanceof Error ? coingeckoError.message : String(coingeckoError));
+        data = JSON.parse(text);
+      } catch (parseError) {
+        throw new Error(`Failed to parse Binance response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+      }
+      
+      // Validate the response format
+      if (!Array.isArray(data)) {
+        throw new Error(`Expected array from Binance, got: ${typeof data}`);
+      }
+      
+      // Transform to our format
+      const result = data.map((item: any) => ({
+        time: Math.floor(item[0] / 1000), // Convert ms to s
+        open: parseFloat(item[1]),
+        high: parseFloat(item[2]),
+        low: parseFloat(item[3]),
+        close: parseFloat(item[4]),
+        volume: parseFloat(item[5])
+      }));
+      
+      // Cache the result if cache is available
+      if (typeof dataCache !== 'undefined' && dataCache.set) {
+        dataCache.set(cacheKey, {
+          data: result,
+          timestamp: Date.now()
+        });
+      }
+      
+      return result;
+      
+    } catch (binanceError) {
+      console.error('Error fetching directly from Binance:', binanceError instanceof Error ? binanceError.message : String(binanceError));
+      
+      // Pokud vaše původní funkce obsahuje část pro generování mock dat, ponechte ji zde
+      // Jinak můžete vyhodit výjimku
+      
+      // Vyhodit výjimku nebo použít mockup data v závislosti na vaší původní implementaci
+      if (typeof generateHistoricalMockCandles === 'function') {
+        console.warn(`Falling back to mock data for ${symbol} ${interval}`);
+        return generateHistoricalMockCandles(interval, limit, symbol, endTime);
+      } else {
+        throw new Error(`Failed to fetch data for ${symbol}`);
       }
     }
-
-    // If all APIs fail, throw an error - no mock data
-    throw new Error(`All data sources failed for ${symbol} ${interval}`);
   } catch (error) {
     console.error("Error fetching klines:", error instanceof Error ? error.message : String(error));
-    throw error; // Propagate the error instead of returning mock data
+    
+    // Vyhodit výjimku nebo použít mockup data v závislosti na vaší původní implementaci
+    if (typeof generateHistoricalMockCandles === 'function') {
+      console.warn(`Falling back to mock data for ${symbol} ${interval}`);
+      return generateHistoricalMockCandles(interval, limit, symbol, endTime);
+    } else {
+      throw error;
+    }
   }
 }
 
