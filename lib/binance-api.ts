@@ -44,7 +44,6 @@ const BINANCE_ENDPOINTS = [
   { name: 'binance-api-v3', url: 'https://api.binance.com/api/v3' },
   { name: 'binance-spot-v3', url: 'https://api1.binance.com/api/v3' },
   { name: 'binance-api-eu', url: 'https://api-eu.binance.com/api/v3' },
-  { name: 'binance-api-tr', url: 'https://api-tr.binance.com/api/v3' },
   { name: 'binance-futures-dapi-v1', url: 'https://dapi.binance.com/dapi/v1' }
 ];
 
