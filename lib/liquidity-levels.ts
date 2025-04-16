@@ -258,3 +258,22 @@ export function calculateLiquidityLevels(
     ssl: finalSSL,
   }
 }
+
+// Add the missing export
+export function analyzeLiquidityLevels(
+  candles: CandleData[],
+  timeframe: string,
+): {
+  bsl: LiquidityLevel[]
+  ssl: LiquidityLevel[]
+} {
+  // Determine appropriate swing strength based on timeframe
+  const swingStrength = getSwingStrength(timeframe)
+
+  // Calculate liquidity levels with appropriate parameters for the timeframe
+  return calculateLiquidityLevels(candles, {
+    swingStrength,
+    majorThreshold: 0.3,
+    reqThreshold: 2.0,
+  })
+}

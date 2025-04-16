@@ -62,9 +62,11 @@
     "crypto": "latest",
     "uuid": "latest",
     "node-fetch": "latest",
-    "node-cron": "latest",
+    "dotenv": "latest",
     "fs": "latest",
-    "path": "latest"
+    "path": "latest",
+    "url": "latest",
+    "node-cron": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",

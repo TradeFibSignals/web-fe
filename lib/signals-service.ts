@@ -575,3 +575,65 @@ export async function calculateSignalStats(
     }
   }
 }
+
+// Add the missing export
+export async function generateSignals(
+  symbol: string,
+  timeframe: string,
+  candles: CandleData[],
+): Promise<TradingSignal[]> {
+  // This is a simplified implementation - in a real system, you would use
+  // technical analysis to generate actual trading signals
+  const signals: TradingSignal[] = []
+
+  if (candles.length < 10) {
+    return signals
+  }
+
+  // Get the most recent candles
+  const recentCandles = candles.slice(-10)
+  const lastCandle = recentCandles[recentCandles.length - 1]
+  const prevCandle = recentCandles[recentCandles.length - 2]
+
+  // Simple example: Generate a long signal if the last candle closed higher than the previous
+  if (lastCandle.close > prevCandle.close) {
+    const entry = lastCandle.close
+    const stopLoss = Math.min(...recentCandles.map((c) => c.low)) * 0.99 // 1% below recent lows
+    const takeProfit = entry + (entry - stopLoss) * 2 // 2:1 risk-reward ratio
+
+    signals.push({
+      type: "long",
+      entry,
+      stopLoss,
+      takeProfit,
+      entryTime: new Date(lastCandle.time),
+      pair: symbol,
+      timeframe,
+      source: "algorithm",
+      strength: "medium",
+      notes: "Bullish momentum signal",
+    })
+  }
+
+  // Generate a short signal if the last candle closed lower than the previous
+  if (lastCandle.close < prevCandle.close) {
+    const entry = lastCandle.close
+    const stopLoss = Math.max(...recentCandles.map((c) => c.high)) * 1.01 // 1% above recent highs
+    const takeProfit = entry - (stopLoss - entry) * 2 // 2:1 risk-reward ratio
+
+    signals.push({
+      type: "short",
+      entry,
+      stopLoss,
+      takeProfit,
+      entryTime: new Date(lastCandle.time),
+      pair: symbol,
+      timeframe,
+      source: "algorithm",
+      strength: "medium",
+      notes: "Bearish momentum signal",
+    })
+  }
+
+  return signals
+}

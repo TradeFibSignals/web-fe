@@ -1,30 +1,124 @@
-// Binance API integration for fetching real liquidation and price data
+// WebSocket service for real-time price updates
 
-import type { CandleData } from "@/types"
+type WebSocketCallback = (data: any) => void
 
-type TimeframeType = "5m" | "15m" | "30m" | "1h"
-
-interface LiquidationData {
-  price: number
-  volume: number
+export interface CandleData {
+  open: number
+  high: number
+  low: number
+  close: number
   time: number
-  type: "long" | "short"
+  volume?: number
 }
 
-interface PriceData {
-  price: number
-  time: number
+class BinanceWebSocketService {
+  private socket: WebSocket | null = null
+  private callbacks: Map<string, WebSocketCallback[]> = new Map()
+  private reconnectAttempts = 0
+  private maxReconnectAttempts = 5
+  private reconnectDelay = 3000 // 3 seconds
+  private isConnecting = false
+
+  // Connect to Binance WebSocket
+  connect(symbol: string): void {
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      console.log("WebSocket already connected or connecting")
+      return
+    }
+
+    if (this.isConnecting) {
+      console.log("WebSocket connection in progress")
+      return
+    }
+
+    this.isConnecting = true
+
+    try {
+      // Use Binance Futures WebSocket endpoint for perpetual contracts
+      this.socket = new WebSocket(`wss://fstream.binance.com/ws/${symbol.toLowerCase()}@ticker`)
+
+      this.socket.onopen = () => {
+        console.log("WebSocket connected")
+        this.reconnectAttempts = 0
+        this.isConnecting = false
+      }
+
+      this.socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          const eventType = data.e // Event type from Binance
+
+          // Dispatch to all registered callbacks for this event type
+          if (this.callbacks.has(eventType)) {
+            this.callbacks.get(eventType)?.forEach((callback) => callback(data))
+          }
+
+          // Also dispatch to general callbacks
+          if (this.callbacks.has("message")) {
+            this.callbacks.get("message")?.forEach((callback) => callback(data))
+          }
+        } catch (error) {
+          console.error("Error parsing WebSocket message:", error)
+        }
+      }
+
+      this.socket.onclose = (event) => {
+        console.log(`WebSocket closed: ${event.code} ${event.reason}`)
+        this.isConnecting = false
+
+        // Attempt to reconnect if not closed cleanly
+        if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++
+          console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`)
+          setTimeout(() => this.connect(symbol), this.reconnectDelay)
+        }
+      }
+
+      this.socket.onerror = (error) => {
+        console.error("WebSocket error:", error)
+        this.isConnecting = false
+      }
+    } catch (error) {
+      console.error("Error creating WebSocket:", error)
+      this.isConnecting = false
+    }
+  }
+
+  // Disconnect from WebSocket
+  disconnect(): void {
+    if (this.socket) {
+      this.socket.close()
+      this.socket = null
+    }
+  }
+
+  // Subscribe to WebSocket events
+  subscribe(eventType: string, callback: WebSocketCallback): void {
+    if (!this.callbacks.has(eventType)) {
+      this.callbacks.set(eventType, [])
+    }
+    this.callbacks.get(eventType)?.push(callback)
+  }
+
+  // Unsubscribe from WebSocket events
+  unsubscribe(eventType: string, callback: WebSocketCallback): void {
+    if (this.callbacks.has(eventType)) {
+      const callbacks = this.callbacks.get(eventType) || []
+      const index = callbacks.indexOf(callback)
+      if (index !== -1) {
+        callbacks.splice(index, 1)
+      }
+    }
+  }
+
+  // Check if WebSocket is connected
+  isConnected(): boolean {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN
+  }
 }
 
-interface BinanceApiResponse {
-  liquidationData: LiquidationData[]
-  priceData: PriceData[]
-  currentPrice: number
-  priceChangePercent: number
-}
-
-// Cache for seed values to ensure consistent data generation
-const seedCache: Record<string, number> = {}
+// Create a singleton instance
+export const binanceWebSocket = new BinanceWebSocketService()
 
 // Function to fetch available perpetual pairs from Binance
 export async function fetchAvailablePairs(): Promise<string[]> {
@@ -49,10 +143,15 @@ export async function fetchAvailablePairs(): Promise<string[]> {
 }
 
 export async function fetchBinanceData(
-  timeframe: TimeframeType,
+  timeframe: string,
   symbol = "BTCUSDT",
   priceDataOnly = false,
-): Promise<BinanceApiResponse> {
+): Promise<{
+  liquidationData: any[]
+  priceData: any[]
+  currentPrice: number
+  priceChangePercent: number
+}> {
   try {
     // Get current time and calculate start time (1 day ago)
     const now = Date.now()
@@ -97,7 +196,7 @@ export async function fetchBinanceData(
     )
     const klinesData = await klinesResponse.json()
 
-    const priceData: PriceData[] = klinesData.map((kline: any) => ({
+    const priceData: { time: number; price: number }[] = klinesData.map((kline: any) => ({
       time: kline[0], // Open time
       price: Number.parseFloat(kline[4]), // Close price
     }))
@@ -161,17 +260,18 @@ function hashString(str: string): number {
 
 // Generate synthetic liquidation data based on real price levels
 function generateLiquidationData(
-  priceData: PriceData[],
+  priceData: { time: number; price: number }[],
   currentPrice: number,
   longLiquidationCenter: number,
   shortLiquidationCenter: number,
   symbol: string,
-  timeframe: TimeframeType,
-): LiquidationData[] {
-  const liquidationData: LiquidationData[] = []
+  timeframe: string,
+): { price: number; volume: number; time: number; type: "long" | "short" }[] {
+  const liquidationData: { price: number; volume: number; time: number; type: "long" | "short" }[] = []
 
   // Use consistent seed for the same symbol and timeframe
   const seedKey = `${symbol}-${timeframe}`
+  const seedCache: Record<string, number> = {}
   if (!seedCache[seedKey]) {
     seedCache[seedKey] = hashString(seedKey)
   }
@@ -235,17 +335,9 @@ function generateLiquidationData(
 }
 
 // Function to convert candle data to CandleData format for the chart
-// export interface CandleData {
-//   open: number
-//   high: number
-//   low: number
-//   close: number
-//   time: number
-// }
-
 export async function fetchHistoricalCandles(
   symbol: string,
-  timeframe: TimeframeType,
+  timeframe: string,
   days = 1,
 ): Promise<CandleData[]> {
   try {
@@ -293,6 +385,7 @@ export async function fetchHistoricalCandles(
       high: Number.parseFloat(kline[2]),
       low: Number.parseFloat(kline[3]),
       close: Number.parseFloat(kline[4]),
+      volume: Number.parseFloat(kline[5]), // Volume
     }))
   } catch (error) {
     console.error(`Error fetching historical candles for ${symbol}:`, error)
@@ -341,14 +434,14 @@ export async function fetchTimeframeCandles(symbol: string, timeframe: string, l
   }
 }
 
-// Přidám novou funkci pro získání historických high/low hodnot
+// Function to get historical high/low values
 export async function getHighLowSinceTimestamp(
   symbol: string,
   startTime: number,
 ): Promise<{ high: number; low: number }> {
   try {
-    // Získáme 1-minutové svíčky od startTime do současnosti
-    // Použijeme menší interval pro zachycení krátkodobých cenových špiček
+    // Get 1-minute candles from startTime to now
+    // Use a smaller interval to capture short-term price spikes
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&startTime=${startTime}&limit=1000`
 
     const response = await fetch(url)
@@ -358,19 +451,19 @@ export async function getHighLowSinceTimestamp(
 
     const data = await response.json()
 
-    // Zpracování dat
+    // Process data
     if (!data || !Array.isArray(data) || data.length === 0) {
       console.warn("No historical data received")
       return { high: 0, low: Number.MAX_SAFE_INTEGER }
     }
 
-    // Najdeme nejvyšší high a nejnižší low ze všech svíček
+    // Find highest high and lowest low from all candles
     let highestPrice = 0
     let lowestPrice = Number.MAX_SAFE_INTEGER
 
     for (const candle of data) {
-      const high = Number.parseFloat(candle[2]) // high je na indexu 2
-      const low = Number.parseFloat(candle[3]) // low je na indexu 3
+      const high = Number.parseFloat(candle[2]) // high is at index 2
+      const low = Number.parseFloat(candle[3]) // low is at index 3
 
       if (high > highestPrice) {
         highestPrice = high
@@ -392,5 +485,22 @@ export async function getHighLowSinceTimestamp(
   } catch (error) {
     console.error("Error fetching historical high/low:", error)
     return { high: 0, low: Number.MAX_SAFE_INTEGER }
+  }
+}
+
+// Add function to fetch candlestick data
+export async function fetchCandlestickData(
+  symbol: string,
+  timeframe: string,
+  limit = 100
+): Promise<CandleData[]> {
+  try {
+    console.log(`Fetching candlestick data for ${symbol} on ${timeframe} timeframe, limit: ${limit}`);
+    
+    // Use existing fetchTimeframeCandles function
+    return await fetchTimeframeCandles(symbol, timeframe, limit);
+  } catch (error) {
+    console.error(`Error fetching candlestick data for ${symbol}:`, error);
+    throw error;
   }
 }
