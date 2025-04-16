@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { type NextRequest } from "next/server"
-import { checkAndUpdateSignalStatuses } from "@/lib/signal-generator-service"
+import * as signalGeneratorService from "@/lib/signal-generator-service"
 import { supabase } from "@/lib/supabase-client"
 
 // Function to validate API key
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Call the function to check and update signal statuses
-    await checkAndUpdateSignalStatuses(timeframe || undefined)
+    await signalGeneratorService.checkAndUpdateSignalStatuses(timeframe || undefined)
 
     return NextResponse.json({
       success: true,
