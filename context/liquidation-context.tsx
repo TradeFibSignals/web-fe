@@ -5,7 +5,6 @@ import {
   fetchBinanceData,
   fetchAvailablePairs, 
   fetchHistoricalCandles,
-  fetchTimeframeCandles,
   type CandleData
 } from "@/lib/binance-api"
 import { binanceWebSocket } from "@/lib/websocket-service"
@@ -70,32 +69,22 @@ const DEFAULT_PAIRS = ["BTCUSDT", "SOLUSDT", "TIAUSDT", "ONDOUSDT", "VIRTUALUSDT
 // Helper function to get update interval based on timeframe
 function getUpdateInterval(timeframe: TimeframeType): number {
   switch (timeframe) {
-    case "5m":
-      return 30 * 1000 // 30 seconds
-    case "15m":
-      return 45 * 1000 // 45 seconds
-    case "30m":
-      return 60 * 1000 // 1 minute
-    case "1h":
-      return 2 * 60 * 1000 // 2 minutes
-    default:
-      return 45 * 1000 // 45 seconds default
+    case "5m": return 30 * 1000
+    case "15m": return 45 * 1000
+    case "30m": return 60 * 1000
+    case "1h": return 2 * 60 * 1000
+    default: return 45 * 1000
   }
 }
 
 // Get timeframe duration in milliseconds for S/R zone updates
 function getTimeframeDuration(timeframe: TimeframeType): number {
   switch (timeframe) {
-    case "5m":
-      return 5 * 60 * 1000
-    case "15m":
-      return 15 * 60 * 1000
-    case "30m":
-      return 30 * 60 * 1000
-    case "1h":
-      return 60 * 60 * 1000
-    default:
-      return 15 * 60 * 1000
+    case "5m": return 5 * 60 * 1000
+    case "15m": return 15 * 60 * 1000
+    case "30m": return 30 * 60 * 1000
+    case "1h": return 60 * 60 * 1000
+    default: return 15 * 60 * 1000
   }
 }
 
@@ -106,27 +95,21 @@ function getNextUpdateTime(timeframe: TimeframeType): Date {
 
   switch (timeframe) {
     case "5m":
-      // Next 5-minute mark
       nextUpdate.setUTCMinutes(Math.ceil(now.getUTCMinutes() / 5) * 5, 0, 0)
       break
     case "15m":
-      // Next 15-minute mark
       nextUpdate.setUTCMinutes(Math.ceil(now.getUTCMinutes() / 15) * 15, 0, 0)
       break
     case "30m":
-      // Next 30-minute mark
       nextUpdate.setUTCMinutes(Math.ceil(now.getUTCMinutes() / 30) * 30, 0, 0)
       break
     case "1h":
-      // Next hour
       nextUpdate.setUTCHours(now.getUTCHours() + 1, 0, 0, 0)
       break
     default:
       nextUpdate.setUTCMinutes(Math.ceil(now.getUTCMinutes() / 15) * 15, 0, 0)
   }
 
-  // If the calculated time is in the past (less than 10 seconds from now),
-  // add one timeframe duration to get the next valid update time
   if (nextUpdate.getTime() - now.getTime() < 10000) {
     switch (timeframe) {
       case "5m":
@@ -149,15 +132,14 @@ function getNextUpdateTime(timeframe: TimeframeType): Date {
   return nextUpdate
 }
 
-// Default support and resistance levels for different timeframes
-// These will be used as fallbacks if no strong clusters are found
-const DEFAULT_LEVELS: Record<string, Record<string, { support: number; resistance: number }>> = {
+// Simplifying the default levels to avoid syntax issues
+const DEFAULT_LEVELS = {
   BTCUSDT: {
     "1h": { support: 63000, resistance: 67000 },
     "30m": { support: 63500, resistance: 66500 },
     "15m": { support: 63800, resistance: 66200 },
-    "5m": { support: 64000, resistance: 66000 },
-  },
+    "5m": { support: 64000, resistance: 66000 }
+  }
 }
 
 export function LiquidationProvider({ children }: { children: ReactNode }) {
@@ -175,11 +157,7 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [nextUpdateTime, setNextUpdateTime] = useState<Date | null>(null)
   const [historicalCandles, setHistoricalCandles] = useState<CandleData[]>([])
-  const [volumeData, setVolumeData] = useState<{
-    longVolumeByPrice: Record<number, number>
-    shortVolumeByPrice: Record<number, number>
-    maxBucketVolume: number
-  }>({
+  const [volumeData, setVolumeData] = useState({
     longVolumeByPrice: {},
     shortVolumeByPrice: {},
     maxBucketVolume: 1,
@@ -189,21 +167,7 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
   const [activeSignals, setActiveSignals] = useState<TradingSignal[]>([])
 
   // Use refs to store stable data for each pair
-  const stableDataRef = useRef
-    Record
-      string,
-      {
-        liquidationData: LiquidationData[]
-        supportLevel: number
-        resistanceLevel: number
-        lpi: number
-        lio: number
-        lastFullUpdate: Date
-        needsUpdate: boolean
-        nextUpdateTime: Date
-      }
-    >
-  >({})
+  const stableDataRef = useRef<Record<string, any>>({})
 
   // Ref to track if an update is in progress
   const updateInProgressRef = useRef<boolean>(false)
@@ -250,7 +214,6 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
   const fetchHistoricalData = useCallback(async () => {
     setIsLoading(true)
     try {
-      // Explicitly use fetchHistoricalCandles or fetchTimeframeCandles from binance-api.ts
       const candles = await fetchHistoricalCandles(selectedPair, timeframe)
       setHistoricalCandles(candles)
     } catch (error) {
@@ -405,13 +368,9 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
         // Check if we're at or past the next update time
         const isPastUpdateTime = hasStableData && now >= stableDataRef.current[key].nextUpdateTime
 
-        // Determine if we need a full refresh of S/R zones based on:
-        // 1. User explicitly requested refresh with forceRefresh=true (but only for manual testing)
-        // 2. No stable data exists for this pair/timeframe
-        // 3. We're past the scheduled update time for this timeframe
-        // 4. It's been more than one timeframe duration since last update (fallback)
+        // Determine if we need a full refresh of S/R zones
         const needsFullSRRefresh =
-          (forceRefresh && process.env.NODE_ENV === "development") || // Only allow force refresh in development
+          (forceRefresh && process.env.NODE_ENV === "development") || 
           !hasStableData ||
           isPastUpdateTime ||
           (hasStableData && now.getTime() - hasStableData.lastFullUpdate.getTime() > timeframeDuration * 1.1)
@@ -472,45 +431,36 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
           const price = data.currentPrice
 
           // Calculate appropriate price range percentage based on timeframe
-          // Shorter timeframes should have tighter ranges
-          let minDistancePercentage, resistancePercentage, supportPercentage
+          let minDistancePercentage = 0.045
+          let resistancePercentage = 0.03
+          let supportPercentage = 0.02
 
           switch (timeframe) {
             case "5m":
-              // For 5m, resistance should be 2-3% above, support 1-2% below
-              resistancePercentage = 0.025 // 2.5% above current price
-              supportPercentage = 0.015 // 1.5% below current price
-              minDistancePercentage = 0.035 // Minimum 3.5% between S/R
+              resistancePercentage = 0.025
+              supportPercentage = 0.015
+              minDistancePercentage = 0.035
               break
             case "15m":
-              // For 15m, slightly wider
-              resistancePercentage = 0.03 // 3% above
-              supportPercentage = 0.02 // 2% below
-              minDistancePercentage = 0.045 // Minimum 4.5% between S/R
+              resistancePercentage = 0.03
+              supportPercentage = 0.02
+              minDistancePercentage = 0.045
               break
             case "30m":
-              // For 30m, slightly wider
-              resistancePercentage = 0.035 // 3.5% above
-              supportPercentage = 0.025 // 2.5% below
-              minDistancePercentage = 0.05 // Minimum 5% between S/R
+              resistancePercentage = 0.035
+              supportPercentage = 0.025
+              minDistancePercentage = 0.05
               break
             case "1h":
-              // For 1h
-              resistancePercentage = 0.045 // 4.5% above
-              supportPercentage = 0.035 // 3.5% below
-              minDistancePercentage = 0.07 // Minimum 7% between S/R
+              resistancePercentage = 0.045
+              supportPercentage = 0.035
+              minDistancePercentage = 0.07
               break
-            default:
-              // Default
-              resistancePercentage = 0.03 // 3% above
-              supportPercentage = 0.02 // 2% below
-              minDistancePercentage = 0.045 // Minimum 4.5% between S/R
           }
 
           // Find resistance level (above current price)
           if (longClusters.length > 0) {
             // Filter clusters that are ABOVE current price for resistance
-            // But not too far above (within reasonable trading range)
             const maxResistancePrice = price * (1 + resistancePercentage * 2)
             const minResistancePrice = price * (1 + resistancePercentage * 0.5)
             const abovePriceClusters = longClusters.filter(
@@ -532,7 +482,6 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
           // Find support level (below current price)
           if (shortClusters.length > 0) {
             // Filter clusters that are BELOW current price for support
-            // But not too far below (within reasonable trading range)
             const minSupportPrice = price * (1 - supportPercentage * 2)
             const maxSupportPrice = price * (1 - supportPercentage * 0.5)
             const belowPriceClusters = shortClusters.filter(
@@ -551,8 +500,7 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
             supportLevel = price * (1 - supportPercentage)
           }
 
-          // If we still don't have valid levels (e.g., all clusters on one side),
-          // ensure we have reasonable defaults based on current price
+          // If we still don't have valid levels, ensure we have reasonable defaults
           if (resistanceLevel <= price) {
             resistanceLevel = price * (1 + resistancePercentage)
           }
@@ -643,59 +591,10 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     [timeframe, selectedPair, isLoading, calculateVolumeData],
   )
 
-  // Helper function to get default level for a pair and timeframe
-  function getDefaultLevel(
-    pair: string,
-    timeframe: TimeframeType,
-    type: "support" | "resistance",
-    fallback: number,
-  ): number {
-    if (DEFAULT_LEVELS[pair]) {
-      const pairDefaults = DEFAULT_LEVELS[pair]
-      if (pairDefaults[timeframe]) {
-        return pairDefaults[timeframe][type]
-      }
-    }
-    return fallback
-  }
-
-  // Force refresh data
-  const refreshData = useCallback(async () => {
-    // For manual refresh, we'll only update the liquidation data and price
-    // but keep the S/R zones stable until the next scheduled update
-    await fetchData(false)
-  }, [fetchData])
-
-  // Fetch data when pair or timeframe changes
-  useEffect(() => {
-    fetchData(true) // Force refresh when timeframe or pair changes
-  }, [selectedPair, timeframe, fetchData])
-
-  // Set up periodic updates based on timeframe
-  useEffect(() => {
-    const updateInterval = getUpdateInterval(timeframe)
-
-    // For longer timeframes, use longer update intervals to reduce unnecessary updates
-    const adjustedInterval = Math.max(updateInterval, 30 * 1000) // Minimum 30 seconds
-
-    console.log(`Setting update interval for ${timeframe}: ${adjustedInterval / 1000}s`)
-
-    // Only update price data periodically, S/R zones remain stable
-    const interval = setInterval(() => {
-      // Pass false to avoid forcing refresh of S/R zones
-      fetchData(false)
-    }, adjustedInterval)
-
-    return () => clearInterval(interval)
-  }, [timeframe, fetchData])
-
   // Helper function to find liquidation clusters
   function findLiquidationClusters(liquidations: LiquidationData[]) {
-    // Group liquidations by price range
-    const priceStep = 1000 // $1000 steps for BTC, will be adjusted for other assets
     const volumeByPrice: Record<number, number> = {}
 
-    // Adjust price step based on current price magnitude
     const priceMagnitude = Math.floor(Math.log10(currentPrice))
     const adjustedPriceStep = Math.max(0.0001, Math.pow(10, priceMagnitude - 2))
 
@@ -704,7 +603,6 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
       volumeByPrice[priceRange] = (volumeByPrice[priceRange] || 0) + liq.volume
     })
 
-    // Convert to array and sort by volume
     const clusters = Object.entries(volumeByPrice)
       .map(([price, volume]) => ({
         price: Number(price),
@@ -716,18 +614,37 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     return clusters
   }
 
-  // Check active signals on initialization
-  useEffect(() => {
-    const checkSignalsOnInit = async () => {
-      const activeSignals = getActiveSignals()
-      if (activeSignals.length > 0) {
-        // Check if each active signal has been completed
-        await checkActiveSignals(currentPrice, selectedPair, historicalCandles)
+  // Simple function to get default level - avoiding the problematic part
+  function getDefaultLevel(pair: string, tf: string, type: string, fallback: number): number {
+    try {
+      if (DEFAULT_LEVELS[pair] && DEFAULT_LEVELS[pair][tf]) {
+        return DEFAULT_LEVELS[pair][tf][type]
       }
-    }
+    } catch (e) {}
+    return fallback
+  }
 
-    checkSignalsOnInit()
-  }, [currentPrice, selectedPair, historicalCandles])
+  // Force refresh data
+  const refreshData = useCallback(async () => {
+    await fetchData(false)
+  }, [fetchData])
+
+  // Fetch data when pair or timeframe changes
+  useEffect(() => {
+    fetchData(true)
+  }, [selectedPair, timeframe, fetchData])
+
+  // Set up periodic updates based on timeframe
+  useEffect(() => {
+    const updateInterval = getUpdateInterval(timeframe)
+    const adjustedInterval = Math.max(updateInterval, 30 * 1000)
+
+    const interval = setInterval(() => {
+      fetchData(false)
+    }, adjustedInterval)
+
+    return () => clearInterval(interval)
+  }, [timeframe, fetchData])
 
   return (
     <LiquidationContext.Provider
@@ -751,7 +668,6 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
         volumeData,
         nextUpdateTime,
         historicalCandles,
-        // Signal-related values
         activeSignals,
         refreshActiveSignals,
         completeSignal: completeSignalHandler,
