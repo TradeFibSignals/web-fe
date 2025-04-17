@@ -1,3 +1,4 @@
+// lib/signal-generator-service.ts
 import { supabase } from "./supabase-client";
 import { fetchTimeframeCandles, fetchCandlestickData, type CandleData } from "./binance-api";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -279,17 +280,36 @@ export async function generateSignalsForTimeframe(
             signal_type: signalForDb.signal_type
           });
 
-          // Insert signal into database
-          const { data, error } = await supabaseClient
+          // First check if signal with this ID already exists
+          const { data: existingSignal, error: checkError } = await supabaseClient
             .from("generated_signals")
-            .upsert(signalForDb, {
-              onConflict: "signal_id",
-              ignoreDuplicates: false
-            });
+            .select("signal_id")
+            .eq("signal_id", signalForDb.signal_id)
+            .maybeSingle();
 
-          if (error) {
-            console.error(`Database error saving signal for ${pair}:`, error);
-            throw error;
+          if (checkError) {
+            console.error(`Error checking for existing signal: ${checkError.message}`);
+            throw checkError;
+          }
+
+          let result;
+          if (existingSignal) {
+            // Update existing signal
+            console.log(`Signal ${signalForDb.signal_id} already exists, updating...`);
+            result = await supabaseClient
+              .from("generated_signals")
+              .update(signalForDb)
+              .eq("signal_id", signalForDb.signal_id);
+          } else {
+            // Insert new signal
+            result = await supabaseClient
+              .from("generated_signals")
+              .insert(signalForDb);
+          }
+
+          if (result.error) {
+            console.error(`Database error saving signal for ${pair}:`, result.error);
+            throw result.error;
           } else {
             console.log(`Signal successfully saved to database: ${signal.signal_id}`);
           }
@@ -348,21 +368,44 @@ async function updateSignalCacheForTimeframe(
       return;
     }
 
-    // Insert or update cache record
-    const { error } = await supabaseClient
+    // Check if cache_key already exists first
+    const { data: existingCache, error: checkError } = await supabaseClient
       .from("signal_cache")
-      .upsert({
-        cache_key: `${pair}_${timeframe}`,
-        signal_ids: JSON.stringify(signalIds),
-        pair,
-        timeframe,
-        last_updated: new Date().toISOString(),
-      }, {
-        onConflict: 'cache_key', // Specifies which column to check for conflicts
-      });
+      .select("id")
+      .eq("cache_key", `${pair}_${timeframe}`)
+      .maybeSingle();
 
-    if (error) {
-      console.error(`Error updating cache for ${pair} ${timeframe}:`, error);
+    if (checkError) {
+      console.error(`Error checking existing cache: ${checkError.message}`);
+      return;
+    }
+
+    // Insert or update based on whether the cache entry already exists
+    let result;
+    if (existingCache) {
+      // Update existing cache entry
+      result = await supabaseClient
+        .from("signal_cache")
+        .update({
+          signal_ids: JSON.stringify(signalIds),
+          last_updated: new Date().toISOString()
+        })
+        .eq("id", existingCache.id);
+    } else {
+      // Insert new cache entry
+      result = await supabaseClient
+        .from("signal_cache")
+        .insert({
+          cache_key: `${pair}_${timeframe}`,
+          signal_ids: JSON.stringify(signalIds),
+          pair,
+          timeframe,
+          last_updated: new Date().toISOString()
+        });
+    }
+
+    if (result.error) {
+      console.error(`Error updating cache for ${pair} ${timeframe}:`, result.error);
     } else {
       console.log(`Cache successfully updated for ${pair} ${timeframe}: ${signalIds.length} signals`);
     }
@@ -378,20 +421,32 @@ async function cleanupOldCacheEntriesForTimeframe(timeframe: string, supabaseCli
       return;
     }
 
+    // First, check if the timeframe column exists
+    const { error: checkError } = await supabaseClient
+      .from("signal_cache")
+      .select("count(*)")
+      .limit(1);
+
+    if (checkError) {
+      console.error(`Error checking signal_cache table: ${checkError.message}`);
+      return;
+    }
+
     // Set time limit for old records (24 hours)
     const cutoffTime = new Date();
     cutoffTime.setHours(cutoffTime.getHours() - 24);
 
+    // We won't filter by timeframe if we're unsure about the column
+    // Instead, just delete entries older than the cutoff time
     const { error } = await supabaseClient
       .from("signal_cache")
       .delete()
-      .eq("timeframe", timeframe)
       .lt("last_updated", cutoffTime.toISOString());
 
     if (error) {
-      console.error(`Error cleaning up old cache entries for ${timeframe}:`, error);
+      console.error(`Error cleaning up old cache entries:`, error);
     } else {
-      console.log(`Old cache entries cleaned up for ${timeframe}`);
+      console.log(`Old cache entries cleaned up`);
     }
   } catch (error) {
     console.error(`Error in cleanupOldCacheEntriesForTimeframe:`, error);
@@ -593,6 +648,34 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
     if (!supabase) {
       console.error("Supabase client is not available for cache retrieval");
       return [];
+    }
+
+    // Check if our cache table is accessible
+    const { error: checkError } = await supabase
+      .from("signal_cache")
+      .select("count(*)")
+      .limit(1);
+
+    // If there's an error accessing the cache table, get signals directly from generated_signals
+    if (checkError) {
+      console.log(`Unable to access signal_cache table: ${checkError.message}`);
+      console.log(`Fetching signals directly from generated_signals table`);
+      
+      const { data: signals, error } = await supabase
+        .from("generated_signals")
+        .select("*")
+        .eq("pair", pair)
+        .eq("timeframe", timeframe)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (error) {
+        console.error(`Error fetching signals for ${pair} on ${timeframe}:`, error);
+        return [];
+      }
+
+      return signals || [];
     }
 
     // Try to get signals from cache

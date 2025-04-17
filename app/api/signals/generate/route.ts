@@ -1,6 +1,3 @@
-// API endpoint for generating trading signals
-// This should be placed in your Vercel project at app/api/signals/generate/route.ts
-
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSignalsForTimeframe } from '@/lib/signal-generator-service';
 import { supabase } from '@/lib/supabase-client';
