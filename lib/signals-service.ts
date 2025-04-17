@@ -373,7 +373,7 @@ export function cancelSignal(signalId: string): void {
 export async function getCompletedSignals(
   limit = 100,
   offset = 0,
-  filters: { pair?: string; timeframe?: string; signalType?: string } = {},
+  filters: { pair?: string; timeframe?: string; signalType?: string; dateFrom?: Date; dateTo?: Date } = {},
 ): Promise<TradingSignal[]> {
   if (!supabase) {
     console.error("Supabase client not available")
@@ -399,6 +399,14 @@ export async function getCompletedSignals(
 
     if (filters.signalType) {
       query = query.eq("signal_type", filters.signalType)
+    }
+
+    if (filters.dateFrom) {
+      query = query.gte("exit_time", filters.dateFrom.toISOString())
+    }
+
+    if (filters.dateTo) {
+      query = query.lte("exit_time", filters.dateTo.toISOString())
     }
 
     const { data, error } = await query
@@ -636,4 +644,68 @@ export async function generateSignals(
   }
 
   return signals
+}
+
+// New function to sync completed signals from generated_signals to completed_signals table
+export async function syncCompletedSignals(): Promise<void> {
+  if (!supabase) {
+    console.error("Supabase client not available")
+    return
+  }
+
+  try {
+    // Get completed signals from generated_signals table
+    const { data: completedGeneratedSignals, error } = await supabase
+      .from("generated_signals")
+      .select("*")
+      .in("status", ["completed", "expired"])
+      .is("synced_to_completed", null) // Only get unsynced signals
+
+    if (error) {
+      console.error("Error fetching completed generated signals:", error)
+      return
+    }
+
+    console.log(`Found ${completedGeneratedSignals?.length || 0} completed signals to sync`)
+
+    // Insert each completed signal into completed_signals table
+    for (const signal of completedGeneratedSignals || []) {
+      try {
+        const { error: insertError } = await supabase.from("completed_signals").insert({
+          signal_id: signal.signal_id,
+          signal_type: signal.signal_type,
+          entry_price: signal.entry_price,
+          stop_loss: signal.stop_loss,
+          take_profit: signal.take_profit,
+          exit_price: signal.exit_price,
+          exit_type: signal.exit_type,
+          entry_time: signal.created_at,
+          exit_time: signal.exit_time || signal.updated_at,
+          pair: signal.pair,
+          timeframe: signal.timeframe,
+          profit_loss: signal.profit_loss || 0,
+          profit_loss_percent: signal.profit_loss_percent || 0,
+          risk_reward_ratio: signal.risk_reward_ratio,
+          signal_source: signal.signal_source,
+          notes: null,
+        })
+
+        if (insertError) {
+          console.error(`Error inserting completed signal ${signal.signal_id}:`, insertError)
+        } else {
+          // Mark as synced
+          await supabase
+            .from("generated_signals")
+            .update({ synced_to_completed: true })
+            .eq("signal_id", signal.signal_id)
+          
+          console.log(`Signal ${signal.signal_id} synced to completed_signals`)
+        }
+      } catch (error) {
+        console.error(`Error syncing signal ${signal.signal_id}:`, error)
+      }
+    }
+  } catch (error) {
+    console.error("Error syncing completed signals:", error)
+  }
 }
