@@ -1,97 +1,155 @@
-import { NextResponse } from "next/server";
-import { type NextRequest } from "next/server";
-import { supabase } from "@/lib/supabase-client";
+import { calculateMonthlyAverages, calculateMonthlyPositiveProb } from "./seasonality-data";
+import { supabase } from "./supabase-client";
 
-// Zjednodušená verze API endpointu pro opravení signálů
-export async function GET(request: NextRequest) {
+// Get monthly average returns from cache or calculate
+export async function getMonthlyAverages(): Promise<Record<number, number>> {
   try {
-    const action = request.nextUrl.searchParams.get("action") || "all";
-    
     if (!supabase) {
-      return NextResponse.json({ error: "Supabase client not available" }, { status: 500 });
+      console.warn("Supabase client not available, using direct calculation");
+      return calculateMonthlyAverages();
     }
 
-    const results = {
-      timestamp: new Date().toISOString(),
-      actions: []
-    };
-    
-    if (action === "seasonality" || action === "all") {
-      // Získat aktuální měsíc (0-indexovaný)
-      const currentMonth = new Date().getMonth();
+    // Try to get from cache first
+    const { data, error } = await supabase
+      .from("seasonality_cache")
+      .select("value")
+      .eq("key", "monthly_averages")
+      .single();
+
+    if (error || !data) {
+      console.log("Cache miss for monthly_averages, calculating fresh data");
+      const averages = calculateMonthlyAverages();
       
-      // Dubnová hodnota by měla být 64%
-      let probability = 50;
-      let seasonality = "neutral";
-      
-      if (currentMonth === 3) { // Duben
-        probability = 64;
-        seasonality = "bullish";
-      } else if (probability >= 60) {
-        seasonality = "bullish";
-      } else if (probability <= 40) {
-        seasonality = "bearish";
-      }
-      
-      const { data, error } = await supabase
-        .from("generated_signals")
-        .update({
-          seasonality,
-          positive_probability: probability,
+      // Store in cache for future use
+      try {
+        await supabase.from("seasonality_cache").upsert({
+          key: "monthly_averages",
+          value: averages,
           updated_at: new Date().toISOString()
-        })
-        .eq("status", "active");
-        
-      results.actions.push({
-        name: "seasonality",
-        success: !error,
-        message: error ? error.message : `Updated seasonality to ${seasonality} (${probability}%)`
-      });
-    }
-    
-    if (action === "sync" || action === "all") {
-      try {
-        const { data, error } = await supabase
-          .rpc("sync_completed_signals");
-          
-        results.actions.push({
-          name: "sync_completed",
-          success: !error,
-          message: error ? error.message : "Synced completed signals"
         });
-      } catch (error) {
-        results.actions.push({
-          name: "sync_completed",
-          success: false,
-          message: error instanceof Error ? error.message : "Unknown error"
-        });
+      } catch (cacheError) {
+        console.error("Error caching monthly averages:", cacheError);
       }
+      
+      return averages;
     }
-    
-    if (action === "tables" || action === "all") {
-      try {
-        const { error } = await supabase
-          .rpc("create_completed_signals_table");
-          
-        results.actions.push({
-          name: "create_tables",
-          success: !error,
-          message: error ? error.message : "Tables created successfully"
-        });
-      } catch (error) {
-        results.actions.push({
-          name: "create_tables",
-          success: false,
-          message: error instanceof Error ? error.message : "Unknown error"
-        });
-      }
-    }
-    
-    return NextResponse.json(results);
+
+    return data.value;
   } catch (error) {
-    return NextResponse.json({ 
-      error: "Internal server error", 
-      message: error instanceof Error ? error.message : String(error) 
-    }, { status: 500 });
+    console.error("Error getting monthly averages:", error);
+    // Fallback to direct calculation
+    return calculateMonthlyAverages();
+  }
+}
+
+// Get monthly positive probability from cache or calculate
+export async function getMonthlyPositiveProb(): Promise<Record<number, number>> {
+  try {
+    if (!supabase) {
+      console.warn("Supabase client not available, using direct calculation");
+      return calculateMonthlyPositiveProb();
+    }
+
+    // Try to get from cache first
+    const { data, error } = await supabase
+      .from("seasonality_cache")
+      .select("value")
+      .eq("key", "monthly_positive_prob")
+      .single();
+
+    if (error || !data) {
+      console.log("Cache miss for monthly_positive_prob, calculating fresh data");
+      const probabilities = calculateMonthlyPositiveProb();
+      
+      // Store in cache for future use
+      try {
+        await supabase.from("seasonality_cache").upsert({
+          key: "monthly_positive_prob",
+          value: probabilities,
+          updated_at: new Date().toISOString()
+        });
+      } catch (cacheError) {
+        console.error("Error caching monthly probabilities:", cacheError);
+      }
+      
+      return probabilities;
+    }
+
+    return data.value;
+  } catch (error) {
+    console.error("Error getting monthly probabilities:", error);
+    // Fallback to direct calculation
+    return calculateMonthlyPositiveProb();
+  }
+}
+
+// Get detailed stats for a specific month
+export async function getMonthlyStats(month: number): Promise<any> {
+  try {
+    if (!supabase) {
+      console.warn("Supabase client not available, using direct calculation");
+      // Import dynamically to avoid circular dependencies
+      const { useMonthlyStats } = await import("./seasonality-data");
+      return useMonthlyStats(month);
+    }
+
+    // Try to get from cache first
+    const { data, error } = await supabase
+      .from("seasonality_cache")
+      .select("value")
+      .eq("key", `monthly_stats_${month}`)
+      .single();
+
+    if (error || !data) {
+      console.log(`Cache miss for monthly_stats_${month}, calculating fresh data`);
+      // Import dynamically to avoid circular dependencies
+      const { useMonthlyStats } = await import("./seasonality-data");
+      const stats = useMonthlyStats(month);
+      
+      // Store in cache for future use
+      try {
+        await supabase.from("seasonality_cache").upsert({
+          key: `monthly_stats_${month}`,
+          value: stats,
+          updated_at: new Date().toISOString()
+        });
+      } catch (cacheError) {
+        console.error(`Error caching monthly stats for month ${month}:`, cacheError);
+      }
+      
+      return stats;
+    }
+
+    return data.value;
+  } catch (error) {
+    console.error(`Error getting monthly stats for month ${month}:`, error);
+    // Fallback to direct calculation
+    const { useMonthlyStats } = await import("./seasonality-data");
+    return useMonthlyStats(month);
+  }
+}
+
+// Invalidate all seasonality caches
+export async function invalidateSeasonalityCache(): Promise<boolean> {
+  try {
+    if (!supabase) {
+      console.warn("Supabase client not available, cannot invalidate cache");
+      return false;
+    }
+
+    const { error } = await supabase
+      .from("seasonality_cache")
+      .delete()
+      .like("key", "monthly_%");
+
+    if (error) {
+      console.error("Error invalidating seasonality cache:", error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error("Error invalidating seasonality cache:", error);
+    return false;
   }
 }
