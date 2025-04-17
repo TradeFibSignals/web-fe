@@ -1,281 +1,58 @@
-import { supabase } from "./supabase-client"
-import { fetchTimeframeCandles, fetchCandlestickData, type CandleData } from "./binance-api"
-import type { SupabaseClient } from "@supabase/supabase-js"
-import { calculateLiquidityLevels } from "./liquidity-levels"
-import { v4 as uuidv4 } from "uuid"
+// lib/signal-generator-service.ts
+import { supabase } from "./supabase-client";
+import { fetchTimeframeCandles, fetchCandlestickData, type CandleData } from "./binance-api";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { calculateLiquidityLevels } from "./liquidity-levels";
+import { v4 as uuidv4 } from "uuid";
 
 // Timeframe types we'll process
-const TIMEFRAMES = ["5m", "15m", "30m", "1h"]
+const TIMEFRAMES = ["5m", "15m", "30m", "1h"];
 
-// Historical data for seasonality
-const historicalMonthlyReturns = {
-  0: {
-    // January
-    2011: 66.67,
-    2012: 10.0,
-    2013: 15.38,
-    2014: -14.29,
-    2015: -33.33,
-    2016: 11.11,
-    2017: 15.79,
-    2018: -14.29,
-    2019: 2.7,
-    2020: 4.73,
-    2021: 10.37,
-    2022: -2.17,
-    2023: 25.0,
-    2024: 0.72,
-  },
-  1: {
-    // February
-    2011: 100.0,
-    2012: 0.0,
-    2013: 33.33,
-    2014: -16.67,
-    2015: 25.0,
-    2016: 20.0,
-    2017: 18.18,
-    2018: -16.67,
-    2019: 5.26,
-    2020: 20.0,
-    2021: 40.63,
-    2022: -11.11,
-    2023: 8.0,
-    2024: 43.76,
-  },
-  2: {
-    // March
-    2011: 400.0,
-    2012: 9.09,
-    2013: 50.0,
-    2014: -10.0,
-    2015: 0.0,
-    2016: 8.33,
-    2017: 7.69,
-    2018: -10.0,
-    2019: 25.0,
-    2020: -16.67,
-    2021: 33.33,
-    2022: -12.5,
-    2023: 5.56,
-    2024: 16.62,
-  },
-  3: {
-    // April
-    2011: 10.0,
-    2012: 0.0,
-    2013: 733.33,
-    2014: 33.33,
-    2015: 0.0,
-    2016: 7.69,
-    2017: 28.57,
-    2018: -11.11,
-    2019: 20.0,
-    2020: 20.0,
-    2021: 6.67,
-    2022: -8.57,
-    2023: 2.79,
-    2024: -15.0,
-  },
-  4: {
-    // May
-    2011: 81.82,
-    2012: 0.0,
-    2013: -40.0,
-    2014: -8.33,
-    2015: 8.0,
-    2016: 7.14,
-    2017: 11.11,
-    2018: -12.5,
-    2019: 33.33,
-    2020: 5.56,
-    2021: -14.06,
-    2022: -9.38,
-    2023: -6.87,
-    2024: 11.35,
-  },
-  5: {
-    // June
-    2011: 200.0,
-    2012: -8.33,
-    2013: -20.0,
-    2014: -9.09,
-    2015: 7.41,
-    2016: 20.0,
-    2017: -25.0,
-    2018: -14.29,
-    2019: 25.0,
-    2020: 5.26,
-    2021: -9.09,
-    2022: -13.79,
-    2023: 11.97,
-    2024: -7.13,
-  },
-  6: {
-    // July
-    2011: -33.33,
-    2012: 0.0,
-    2013: 8.33,
-    2014: -20.0,
-    2015: -13.79,
-    2016: -5.56,
-    2017: -6.67,
-    2018: 16.67,
-    2019: 10.0,
-    2020: 5.0,
-    2021: -10.0,
-    2022: 20.0,
-    2023: -4.09,
-    2024: 3.1,
-  },
-  7: {
-    // August
-    2011: -25.0,
-    2012: 9.09,
-    2013: -7.69,
-    2014: -12.5,
-    2015: 4.0,
-    2016: -5.88,
-    2017: 7.14,
-    2018: -14.29,
-    2019: -13.64,
-    2020: 14.29,
-    2021: 11.11,
-    2022: -6.67,
-    2023: -11.29,
-    2024: -8.75,
-  },
-  8: {
-    // September
-    2011: -33.33,
-    2012: 0.0,
-    2013: 8.33,
-    2014: -14.29,
-    2015: 7.69,
-    2016: -6.25,
-    2017: 33.33,
-    2018: -16.67,
-    2019: -10.53,
-    2020: -8.33,
-    2021: -20.0,
-    2022: -3.57,
-    2023: 3.99,
-    2024: 7.39,
-  },
-  9: {
-    // October
-    2011: 0.0,
-    2012: 8.33,
-    2013: 53.85,
-    2014: -16.67,
-    2015: 7.14,
-    2016: 6.67,
-    2017: 50.0,
-    2018: -10.0,
-    2019: -5.88,
-    2020: 9.09,
-    2021: 50.0,
-    2022: -3.7,
-    2023: 28.55,
-    2024: 10.87,
-  },
-  10: {
-    // November
-    2011: -30.0,
-    2012: 7.69,
-    2013: 400.0,
-    2014: -20.0,
-    2015: 33.33,
-    2016: 12.5,
-    2017: 133.33,
-    2018: -11.11,
-    2019: -12.5,
-    2020: 53.19,
-    2021: 15.0,
-    2022: -3.85,
-    2023: 8.81,
-    2024: 37.36,
-  },
-  11: {
-    // December
-    2011: -28.57,
-    2012: 92.14,
-    2013: -30.0,
-    2014: 50.0,
-    2015: 12.5,
-    2016: 5.56,
-    2017: 100.0,
-    2018: -7.5,
-    2019: 0.0,
-    2020: 57.72,
-    2021: -33.33,
-    2022: -20.0,
-    2023: 12.06,
-    2024: -3.14,
-  },
-}
+// Historical data for seasonality - imported from seasonality-data.ts
+import { historicalMonthlyReturns } from "./seasonality-data";
 
 // Interface for generated signal
-interface GeneratedSignal {
-  signal_id: string
-  signal_type: "long" | "short"
-  entry_price: number
-  stop_loss: number
-  take_profit: number
-  pair: string
-  timeframe: string
-  signal_source: string
-  major_level?: number
-  peak_price?: number
-  peak_time?: Date
-  fib_levels?: any
-  risk_reward_ratio: number
-  seasonality: "bullish" | "bearish" | "neutral"
-  positive_probability: number
-}
-
-// Types for signals
-export interface Signal {
-  id: string
-  pair: string
-  timeframe: string
-  direction: "long" | "short"
-  entryPrice: number
-  stopLoss: number
-  takeProfit: number
-  timestamp: number
-  status: "active" | "completed" | "expired"
-  entryHit?: boolean
-  tpHit?: boolean
-  slHit?: boolean
+export interface GeneratedSignal {
+  signal_id: string;
+  signal_type: "long" | "short";
+  entry_price: number;
+  stop_loss: number;
+  take_profit: number;
+  pair: string;
+  timeframe: string;
+  signal_source: string;
+  major_level?: number;
+  peak_price?: number;
+  peak_time?: Date;
+  fib_levels?: any;
+  risk_reward_ratio: number;
+  seasonality: "bullish" | "bearish" | "neutral";
+  positive_probability: number;
 }
 
 // Function to get current seasonality
 function getCurrentSeasonality(): { seasonality: "bullish" | "bearish" | "neutral"; probability: number } {
-  const currentMonth = new Date().getMonth()
-  const monthData = historicalMonthlyReturns[currentMonth as keyof typeof historicalMonthlyReturns]
+  const currentMonth = new Date().getMonth();
+  const monthData = historicalMonthlyReturns[currentMonth as keyof typeof historicalMonthlyReturns];
 
   if (monthData) {
-    const returns = Object.values(monthData)
-    const positiveCount = returns.filter((ret) => ret > 0).length
-    const probability = (positiveCount / returns.length) * 100
+    const returns = Object.values(monthData);
+    const positiveCount = returns.filter((ret) => ret > 0).length;
+    const probability = (positiveCount / returns.length) * 100;
 
     // Determine seasonality based on probability of positive returns
     if (probability >= 60) {
-      return { seasonality: "bullish", probability }
+      return { seasonality: "bullish", probability };
     } else if (probability <= 40) {
-      return { seasonality: "bearish", probability }
-    } else {
-      return { seasonality: "neutral", probability }
+      return { seasonality: "bearish", probability };
     }
   }
 
-  return { seasonality: "neutral", probability: 50 }
+  return { seasonality: "neutral", probability: 50 };
 }
 
 // Function to analyze liquidity levels
 function analyzeLiquidityLevels(candles: CandleData[]) {
-  // Use calculateLiquidityLevels
   try {
     return calculateLiquidityLevels(candles, {
       swingStrength: 5,
@@ -289,8 +66,8 @@ function analyzeLiquidityLevels(candles: CandleData[]) {
 }
 
 // Function to generate signals
-function generateSignals(pair: string, timeframe: string, candles: CandleData[], liquidityLevels: any): Signal[] {
-  const signals: Signal[] = [];
+function generateSignals(pair: string, timeframe: string, candles: CandleData[], liquidityLevels: any): GeneratedSignal[] {
+  const signals: GeneratedSignal[] = [];
   
   try {
     // Get current seasonality
@@ -343,7 +120,6 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
     
     // Create base signal
     const signalId = uuidv4();
-    const now = Date.now();
     
     // Create conservative entry and SL/TP
     let entryPrice, stopLoss, takeProfit;
@@ -360,20 +136,32 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
       takeProfit = entryPrice - (stopLoss - entryPrice) * 3; // TP with 1:3 RRR
     }
     
+    // Gather all Fibonacci levels for reference
+    const priceDiff = Math.abs(relevantLevel.price - currentPrice);
+    const fibLevels = [0, 23.6, 38.2, 50, 61.8, 78.6, 100].map(level => {
+      const price = signalType === "long" 
+        ? relevantLevel.price + (priceDiff * level / 100)
+        : relevantLevel.price - (priceDiff * level / 100);
+      return { level, price };
+    });
+    
     // Add signal to results
     signals.push({
-      id: signalId,
+      signal_id: signalId,
+      signal_type: signalType,
+      entry_price: entryPrice,
+      stop_loss: stopLoss,
+      take_profit: takeProfit,
       pair,
       timeframe,
-      direction: signalType,
-      entryPrice,
-      stopLoss,
-      takeProfit,
-      timestamp: now,
-      status: "active",
-      entryHit: false,
-      tpHit: false,
-      slHit: false
+      signal_source: "fibonacci",
+      major_level: relevantLevel.price,
+      peak_price: currentPrice,
+      peak_time: new Date(),
+      fib_levels: fibLevels,
+      risk_reward_ratio: 3.0,
+      seasonality,
+      positive_probability: probability
     });
     
     return signals;
@@ -383,32 +171,32 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
   }
 }
 
-export async function generateSignalsForTimeframe(timeframe: string, supabase: SupabaseClient) {
-  console.log(`Generating signals for timeframe: ${timeframe}`)
+export async function generateSignalsForTimeframe(timeframe: string, client?: SupabaseClient) {
+  console.log(`Generating signals for timeframe: ${timeframe}`);
+
+  // Use provided client or default supabase client
+  const supabaseClient = client || supabase;
 
   // Check if Supabase client is valid
-  if (!supabase) {
-    throw new Error("Supabase client is not available")
+  if (!supabaseClient) {
+    throw new Error("Supabase client is not available");
   }
 
   // List of pairs to generate signals for
-  const pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"]
-  const results = []
+  const pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"];
+  const results = [];
 
   for (const pair of pairs) {
     try {
-      console.log(`Processing pair: ${pair} with timeframe: ${timeframe}`)
+      console.log(`Processing pair: ${pair} with timeframe: ${timeframe}`);
 
       // Get candlestick data from Binance API
-      let candlestickData
+      let candlestickData;
       try {
-        // Use fetchCandlestickData with more extensive error handling
-        // and fallback mechanisms already built in
         console.log(`Fetching candlestick data for ${pair} with limit 100...`);
-        candlestickData = await fetchCandlestickData(pair, timeframe, 100)
+        candlestickData = await fetchCandlestickData(pair, timeframe, 100);
         
-        // Log success or fallback to a smaller dataset if needed
-        console.log(`Received candlestick data for ${pair}: count=${candlestickData?.length || 0}`)
+        console.log(`Received candlestick data for ${pair}: count=${candlestickData?.length || 0}`);
         
         // If still no data after retries and fallbacks, try with a smaller dataset
         if (!candlestickData || !Array.isArray(candlestickData) || candlestickData.length === 0) {
@@ -419,244 +207,253 @@ export async function generateSignalsForTimeframe(timeframe: string, supabase: S
         
         // Final check if we have valid data
         if (!candlestickData || !Array.isArray(candlestickData) || candlestickData.length === 0) {
-          throw new Error("Invalid or empty candlestick data received after all fallback attempts")
+          throw new Error("Invalid or empty candlestick data received after all fallback attempts");
         }
       } catch (fetchError) {
-        console.error(`Error fetching candlestick data for ${pair}:`, fetchError)
+        console.error(`Error fetching candlestick data for ${pair}:`, fetchError);
         results.push({
           pair,
           error: fetchError instanceof Error ? fetchError.message : "Error fetching candlestick data"
-        })
-        continue // Skip to next pair
+        });
+        continue; // Skip to next pair
       }
 
       // Analyze liquidity levels
-      let liquidityLevels
+      let liquidityLevels;
       try {
-        liquidityLevels = analyzeLiquidityLevels(candlestickData)
-        console.log(`Analyzed liquidity levels for ${pair}: bsl=${liquidityLevels.bsl.length}, ssl=${liquidityLevels.ssl.length}`)
+        liquidityLevels = analyzeLiquidityLevels(candlestickData);
+        console.log(`Analyzed liquidity levels for ${pair}: bsl=${liquidityLevels.bsl.length}, ssl=${liquidityLevels.ssl.length}`);
       } catch (analysisError) {
-        console.error(`Error analyzing liquidity levels for ${pair}:`, analysisError)
+        console.error(`Error analyzing liquidity levels for ${pair}:`, analysisError);
         results.push({
           pair,
           error: analysisError instanceof Error ? analysisError.message : "Error analyzing liquidity levels"
-        })
-        continue // Skip to next pair
+        });
+        continue; // Skip to next pair
       }
 
       // Generate signals based on liquidity levels
-      let signals
+      let signals;
       try {
-        signals = generateSignals(pair, timeframe, candlestickData, liquidityLevels)
-        console.log(`Generated ${signals.length} signals for ${pair}`)
+        signals = generateSignals(pair, timeframe, candlestickData, liquidityLevels);
+        console.log(`Generated ${signals.length} signals for ${pair}`);
       } catch (signalError) {
-        console.error(`Error generating signals for ${pair}:`, signalError)
+        console.error(`Error generating signals for ${pair}:`, signalError);
         results.push({
           pair,
           error: signalError instanceof Error ? signalError.message : "Error generating signals"
-        })
-        continue // Skip to next pair
+        });
+        continue; // Skip to next pair
       }
 
       // Save signals to database
       for (const signal of signals) {
         try {
-          const { data, error } = await supabase.from("generated_signals").upsert(
-            {
-              signal_id: signal.id,
-              signal_type: signal.direction,
-              entry_price: signal.entryPrice,
-              stop_loss: signal.stopLoss,
-              take_profit: signal.takeProfit,
-              pair: signal.pair,
-              timeframe: signal.timeframe,
-              signal_source: "fibonacci",
-              status: "active",
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              entry_hit: signal.entryHit || false,
-              seasonality: getCurrentSeasonality().seasonality,
-              positive_probability: getCurrentSeasonality().probability,
-              risk_reward_ratio: 3.0
-            },
-            {
+          // Convert any Date objects to ISO strings for database compatibility
+          const signalForDb = {
+            ...signal,
+            peak_time: signal.peak_time ? signal.peak_time.toISOString() : new Date().toISOString(),
+            fib_levels: signal.fib_levels ? JSON.stringify(signal.fib_levels) : null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            status: 'active',
+            entry_hit: false,
+          };
+          
+          console.log(`Inserting signal into database:`, {
+            signal_id: signalForDb.signal_id,
+            pair: signalForDb.pair,
+            timeframe: signalForDb.timeframe,
+            signal_type: signalForDb.signal_type
+          });
+
+          // Insert signal into database
+          const { data, error } = await supabaseClient
+            .from("generated_signals")
+            .upsert(signalForDb, {
               onConflict: "signal_id",
-            }
-          )
+              ignoreDuplicates: false
+            });
 
           if (error) {
-            console.error(`Error saving signal for ${pair}:`, error)
+            console.error(`Database error saving signal for ${pair}:`, error);
+            throw error;
           } else {
-            console.log(`Signal saved for ${pair}: ${signal.id}`)
+            console.log(`Signal successfully saved to database: ${signal.signal_id}`);
           }
         } catch (saveError) {
-          console.error(`Error saving signal to database for ${pair}:`, saveError)
-          // Continue with next signal even if this one fails
+          console.error(`Error saving signal to database for ${pair}:`, saveError);
         }
       }
 
       // Update cache for quick access
       try {
-        await updateSignalCacheForTimeframe(pair, timeframe, signals, supabase)
+        await updateSignalCacheForTimeframe(pair, timeframe, signals, supabaseClient);
       } catch (cacheError) {
-        console.error(`Error updating cache for ${pair}:`, cacheError)
-        // Continue even if cache update fails
+        console.error(`Error updating cache for ${pair}:`, cacheError);
       }
 
       results.push({
         pair,
         signalsGenerated: signals.length,
-      })
+      });
     } catch (error) {
-      console.error(`Error processing ${pair}:`, error)
+      console.error(`Error processing ${pair}:`, error);
       results.push({
         pair,
         error: error instanceof Error ? error.message : "Unknown error",
-      })
+      });
     }
   }
 
   // Clean up old cache entries
   try {
-    await cleanupOldCacheEntriesForTimeframe(timeframe, supabase)
+    await cleanupOldCacheEntriesForTimeframe(timeframe, supabaseClient);
   } catch (cleanupError) {
-    console.error(`Error cleaning up cache entries:`, cleanupError)
-    // Continue even if cleanup fails
+    console.error(`Error cleaning up cache entries:`, cleanupError);
   }
 
-  return results
+  return results;
 }
 
 async function updateSignalCacheForTimeframe(
   pair: string,
   timeframe: string,
-  signals: Signal[],
-  supabase: SupabaseClient,
+  signals: GeneratedSignal[],
+  supabaseClient: SupabaseClient,
 ) {
   try {
     // First remove old entries for this pair and timeframe
-    const { error: deleteError } = await supabase.from("signal_cache").delete().match({ pair, timeframe })
+    const { error: deleteError } = await supabaseClient
+      .from("signal_cache")
+      .delete()
+      .eq("pair", pair)
+      .eq("timeframe", timeframe);
 
     if (deleteError) {
-      console.error(`Error clearing cache for ${pair} ${timeframe}:`, deleteError)
-      return
+      console.error(`Error clearing cache for ${pair} ${timeframe}:`, deleteError);
+      return;
     }
 
     // Add new signals to cache
     if (signals.length > 0) {
       const cacheEntries = signals.map((signal) => ({
-        signal_id: signal.id,
+        cache_key: `${pair}_${timeframe}_${signal.signal_id}`,
+        signal_id: signal.signal_id,
         pair: signal.pair,
         timeframe: signal.timeframe,
-        cached_at: new Date().toISOString(),
-      }))
+        last_updated: new Date().toISOString(),
+      }));
 
-      const { error: insertError } = await supabase.from("signal_cache").insert(cacheEntries)
+      const { error: insertError } = await supabaseClient
+        .from("signal_cache")
+        .insert(cacheEntries);
 
       if (insertError) {
-        console.error(`Error updating cache for ${pair} ${timeframe}:`, insertError)
+        console.error(`Error updating cache for ${pair} ${timeframe}:`, insertError);
       } else {
-        console.log(`Cache updated for ${pair} ${timeframe}: ${signals.length} signals`)
+        console.log(`Cache updated for ${pair} ${timeframe}: ${signals.length} signals`);
       }
     }
   } catch (error) {
-    console.error(`Error in updateSignalCacheForTimeframe:`, error)
+    console.error(`Error in updateSignalCacheForTimeframe:`, error);
   }
 }
 
-async function cleanupOldCacheEntriesForTimeframe(timeframe: string, supabase: SupabaseClient) {
+async function cleanupOldCacheEntriesForTimeframe(timeframe: string, supabaseClient: SupabaseClient) {
   try {
     // Set time limit for old records (24 hours)
-    const cutoffTime = new Date()
-    cutoffTime.setHours(cutoffTime.getHours() - 24)
+    const cutoffTime = new Date();
+    cutoffTime.setHours(cutoffTime.getHours() - 24);
 
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from("signal_cache")
       .delete()
-      .match({ timeframe })
-      .lt("cached_at", cutoffTime.toISOString())
+      .eq("timeframe", timeframe)
+      .lt("last_updated", cutoffTime.toISOString());
 
     if (error) {
-      console.error(`Error cleaning up old cache entries for ${timeframe}:`, error)
+      console.error(`Error cleaning up old cache entries for ${timeframe}:`, error);
     } else {
-      console.log(`Old cache entries cleaned up for ${timeframe}`)
+      console.log(`Old cache entries cleaned up for ${timeframe}`);
     }
   } catch (error) {
-    console.error(`Error in cleanupOldCacheEntriesForTimeframe:`, error)
+    console.error(`Error in cleanupOldCacheEntriesForTimeframe:`, error);
   }
 }
 
-// Function to check and update signal statuses for a specific timeframe
+// Function to check and update signal statuses
 export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<void> {
   try {
-    console.log(`Checking and updating signal statuses${timeframe ? ` for ${timeframe} timeframe` : ""}...`)
+    console.log(`Checking and updating signal statuses${timeframe ? ` for ${timeframe} timeframe` : ""}...`);
 
     // Get all active signals
-    let query = supabase.from("generated_signals").select("*").eq("status", "active")
+    let query = supabase.from("generated_signals").select("*").eq("status", "active");
 
     // If timeframe is specified, filter by it
     if (timeframe) {
-      query = query.eq("timeframe", timeframe)
+      query = query.eq("timeframe", timeframe);
     }
 
-    const { data: activeSignals, error } = await query
+    const { data: activeSignals, error } = await query;
 
     if (error) {
-      console.error("Error fetching active signals:", error)
-      return
+      console.error("Error fetching active signals:", error);
+      return;
     }
 
+    console.log(`Found ${activeSignals?.length || 0} active signals to check`);
+
     // Group signals by pair
-    const signalsByPair: Record<string, any[]> = {}
+    const signalsByPair: Record<string, any[]> = {};
 
     activeSignals?.forEach((signal) => {
       if (!signalsByPair[signal.pair]) {
-        signalsByPair[signal.pair] = []
+        signalsByPair[signal.pair] = [];
       }
-      signalsByPair[signal.pair].push(signal)
-    })
+      signalsByPair[signal.pair].push(signal);
+    });
 
     // Process signals for each pair
     for (const [pair, signals] of Object.entries(signalsByPair)) {
       try {
         // Get current price and historical candles for the pair
-        const currentPriceData = await fetchTimeframeCandles(pair, "1m", 1)
+        const currentPriceData = await fetchTimeframeCandles(pair, "1m", 1);
 
         if (!currentPriceData || currentPriceData.length === 0) {
-          console.log(`No current price data available for ${pair}, skipping...`)
-          continue
+          console.log(`No current price data available for ${pair}, skipping...`);
+          continue;
         }
 
-        const currentPrice = currentPriceData[0].close
+        const currentPrice = currentPriceData[0].close;
+        console.log(`Current price for ${pair}: ${currentPrice}`);
 
         // Check each signal
         for (const signal of signals) {
           // Check if signal has already been activated (entry hit)
-          let entryHit = signal.entry_hit
-          let entryHitTime = signal.entry_hit_time
-          let status = signal.status
-          let isCompleted = false
-          let exitType: string | null = null
-          let exitPrice: number | null = null
-          let exitTime: Date | null = null
+          let entryHit = signal.entry_hit;
+          let entryHitTime = signal.entry_hit_time;
+          let status = signal.status;
+          let isCompleted = false;
+          let exitType: string | null = null;
+          let exitPrice: number | null = null;
+          let exitTime: Date | null = null;
 
           // First check if entry price has been hit (if not already)
           if (!entryHit) {
             if (signal.signal_type === "long") {
               // For long positions - price must drop to or below entry price
               if (currentPrice <= signal.entry_price) {
-                entryHit = true
-                entryHitTime = new Date().toISOString()
-                status = "active"
-                console.log(`Entry hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                entryHit = true;
+                entryHitTime = new Date().toISOString();
+                console.log(`Entry hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
               }
             } else {
               // For short positions - price must rise to or above entry price
               if (currentPrice >= signal.entry_price) {
-                entryHit = true
-                entryHitTime = new Date().toISOString()
-                status = "active"
-                console.log(`Entry hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                entryHit = true;
+                entryHitTime = new Date().toISOString();
+                console.log(`Entry hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
               }
             }
           }
@@ -666,51 +463,51 @@ export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<
             if (signal.signal_type === "long") {
               // For long positions
               if (currentPrice >= signal.take_profit) {
-                isCompleted = true
-                exitType = "tp"
-                exitPrice = signal.take_profit
-                exitTime = new Date()
-                status = "completed"
-                console.log(`Take profit hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                isCompleted = true;
+                exitType = "tp";
+                exitPrice = signal.take_profit;
+                exitTime = new Date();
+                status = "completed";
+                console.log(`Take profit hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
               } else if (currentPrice <= signal.stop_loss) {
-                isCompleted = true
-                exitType = "sl"
-                exitPrice = signal.stop_loss
-                exitTime = new Date()
-                status = "completed"
-                console.log(`Stop loss hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                isCompleted = true;
+                exitType = "sl";
+                exitPrice = signal.stop_loss;
+                exitTime = new Date();
+                status = "completed";
+                console.log(`Stop loss hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
               }
             } else {
               // For short positions
               if (currentPrice <= signal.take_profit) {
-                isCompleted = true
-                exitType = "tp"
-                exitPrice = signal.take_profit
-                exitTime = new Date()
-                status = "completed"
-                console.log(`Take profit hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                isCompleted = true;
+                exitType = "tp";
+                exitPrice = signal.take_profit;
+                exitTime = new Date();
+                status = "completed";
+                console.log(`Take profit hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
               } else if (currentPrice >= signal.stop_loss) {
-                isCompleted = true
-                exitType = "sl"
-                exitPrice = signal.stop_loss
-                exitTime = new Date()
-                status = "completed"
-                console.log(`Stop loss hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                isCompleted = true;
+                exitType = "sl";
+                exitPrice = signal.stop_loss;
+                exitTime = new Date();
+                status = "completed";
+                console.log(`Stop loss hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
               }
             }
           }
 
           // Check signal expiration (if older than 7 days and not activated)
-          const signalAge = Date.now() - new Date(signal.created_at).getTime()
-          const maxSignalAge = 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+          const signalAge = Date.now() - new Date(signal.created_at).getTime();
+          const maxSignalAge = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
           if (!entryHit && signalAge > maxSignalAge) {
-            isCompleted = true
-            exitType = "expired"
-            exitPrice = currentPrice
-            exitTime = new Date()
-            status = "expired"
-            console.log(`Signal expired for ${pair} ${signal.timeframe} ${signal.signal_type} signal`)
+            isCompleted = true;
+            exitType = "expired";
+            exitPrice = currentPrice;
+            exitTime = new Date();
+            status = "expired";
+            console.log(`Signal expired for ${pair} ${signal.timeframe} ${signal.signal_type} signal`);
           }
 
           // Update signal in database if there was a change
@@ -718,51 +515,54 @@ export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<
             const updateData: any = {
               entry_hit: entryHit,
               status,
-            }
+              updated_at: new Date().toISOString()
+            };
 
             if (entryHit && !signal.entry_hit) {
-              updateData.entry_hit_time = entryHitTime
+              updateData.entry_hit_time = entryHitTime;
             }
 
             if (isCompleted) {
-              updateData.exit_type = exitType
-              updateData.exit_price = exitPrice
-              updateData.exit_time = exitTime
+              updateData.exit_type = exitType;
+              updateData.exit_price = exitPrice;
+              updateData.exit_time = exitTime?.toISOString();
 
               // Calculate P&L
-              let profitLoss = 0
+              let profitLoss = 0;
 
               if (signal.signal_type === "long") {
-                profitLoss = exitPrice! - signal.entry_price
+                profitLoss = exitPrice! - signal.entry_price;
               } else {
-                profitLoss = signal.entry_price - exitPrice!
+                profitLoss = signal.entry_price - exitPrice!;
               }
 
-              updateData.profit_loss = profitLoss
-              updateData.profit_loss_percent = (profitLoss / signal.entry_price) * 100
+              updateData.profit_loss = profitLoss;
+              updateData.profit_loss_percent = (profitLoss / signal.entry_price) * 100;
             }
+
+            console.log(`Updating signal ${signal.signal_id} with data:`, updateData);
 
             // Update in database
             const { error: updateError } = await supabase
               .from("generated_signals")
               .update(updateData)
-              .eq("signal_id", signal.signal_id)
+              .eq("signal_id", signal.signal_id);
 
             if (updateError) {
-              console.error(`Error updating signal ${signal.signal_id}:`, updateError)
+              console.error(`Error updating signal ${signal.signal_id}:`, updateError);
             } else {
-              console.log(`Signal ${signal.signal_id} updated successfully`)
+              console.log(`Signal ${signal.signal_id} updated successfully`);
             }
           }
         }
       } catch (error) {
-        console.error(`Error processing signals for ${pair}:`, error)
+        console.error(`Error processing signals for ${pair}:`, error);
       }
     }
 
-    console.log("Signal status check completed")
+    console.log("Signal status check completed");
   } catch (error) {
-    console.error("Error checking signal statuses:", error)
+    console.error("Error checking signal statuses:", error);
   }
 }
 
@@ -774,10 +574,10 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
       .from("signal_cache")
       .select("signal_id")
       .eq("pair", pair)
-      .eq("timeframe", timeframe)
+      .eq("timeframe", timeframe);
 
     if (cacheError || !cacheEntries || cacheEntries.length === 0) {
-      console.log(`No cache entries found for ${pair}_${timeframe}, fetching from database`)
+      console.log(`No cache entries found for ${pair}_${timeframe}, fetching from database`);
 
       // If not in cache, get directly from database
       const { data: signals, error } = await supabase
@@ -787,37 +587,37 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
         .eq("timeframe", timeframe)
         .eq("status", "active")
         .order("created_at", { ascending: false })
-        .limit(10)
+        .limit(10);
 
       if (error) {
-        console.error(`Error fetching signals for ${pair} on ${timeframe}:`, error)
-        return []
+        console.error(`Error fetching signals for ${pair} on ${timeframe}:`, error);
+        return [];
       }
 
-      return signals || []
+      return signals || [];
     }
 
     // Get signals by ID from cache
-    const signalIds = cacheEntries.map(entry => entry.signal_id)
+    const signalIds = cacheEntries.map(entry => entry.signal_id);
 
     if (signalIds.length === 0) {
-      return []
+      return [];
     }
 
     const { data: signals, error } = await supabase
       .from("generated_signals")
       .select("*")
       .in("signal_id", signalIds)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(`Error fetching signals from cache for ${pair}_${timeframe}:`, error)
-      return []
+      console.error(`Error fetching signals from cache for ${pair}_${timeframe}:`, error);
+      return [];
     }
 
-    return signals || []
+    return signals || [];
   } catch (error) {
-    console.error("Error getting signals from cache:", error)
-    return []
+    console.error("Error getting signals from cache:", error);
+    return [];
   }
 }
