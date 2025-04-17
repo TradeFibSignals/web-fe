@@ -376,55 +376,47 @@ export async function getCompletedSignals(
   filters: { pair?: string; timeframe?: string; signalType?: string; dateFrom?: Date; dateTo?: Date } = {},
 ): Promise<TradingSignal[]> {
   if (!supabase) {
-    console.error("Supabase client not available")
-    return []
+    console.error("Supabase client not available");
+    return [];
   }
 
   try {
-    console.log(`Fetching completed signals with limit ${limit}, offset ${offset}, filters:`, filters);
-    
-    // Try to sync any unsaved signals first
-    try {
-      await syncCompletedSignals();
-    } catch (syncError) {
-      console.error("Error syncing signals during getCompletedSignals:", syncError);
-      // Continue anyway - we'll try to fetch what's available
-    }
+    console.log(`Fetching completed signals with limit ${limit}, offset ${offset}`);
     
     let query = supabase
       .from("completed_signals")
       .select("*")
       .order("exit_time", { ascending: false })
       .limit(limit)
-      .range(offset, offset + limit - 1)
+      .range(offset, offset + limit - 1);
 
     // Apply filters
     if (filters.pair) {
-      query = query.eq("pair", filters.pair)
+      query = query.eq("pair", filters.pair);
     }
 
     if (filters.timeframe) {
-      query = query.eq("timeframe", filters.timeframe)
+      query = query.eq("timeframe", filters.timeframe);
     }
 
     if (filters.signalType) {
-      query = query.eq("signal_type", filters.signalType)
+      query = query.eq("signal_type", filters.signalType);
     }
 
     if (filters.dateFrom) {
-      query = query.gte("exit_time", filters.dateFrom.toISOString())
+      query = query.gte("exit_time", filters.dateFrom.toISOString());
     }
 
     if (filters.dateTo) {
-      query = query.lte("exit_time", filters.dateTo.toISOString())
+      query = query.lte("exit_time", filters.dateTo.toISOString());
     }
 
-    const { data, error } = await query
+    const { data, error } = await query;
     
     if (error) {
-      console.error("Error fetching completed signals:", error)
+      console.error("Error fetching completed signals:", error);
       
-      // If there's an error with the completed_signals table, try the generated_signals table
+      // Pokud se nezdařilo načtení z tabulky completed_signals, zkusme načíst přímo z generated_signals
       console.log("Attempting to fetch from generated_signals as fallback...");
       
       let fallbackQuery = supabase
@@ -433,29 +425,29 @@ export async function getCompletedSignals(
         .in("status", ["completed", "expired"])
         .order("updated_at", { ascending: false })
         .limit(limit)
-        .range(offset, offset + limit - 1)
+        .range(offset, offset + limit - 1);
         
-      // Apply filters to fallback query
+      // Aplikujeme stejné filtry
       if (filters.pair) {
-        fallbackQuery = fallbackQuery.eq("pair", filters.pair)
+        fallbackQuery = fallbackQuery.eq("pair", filters.pair);
       }
 
       if (filters.timeframe) {
-        fallbackQuery = fallbackQuery.eq("timeframe", filters.timeframe)
+        fallbackQuery = fallbackQuery.eq("timeframe", filters.timeframe);
       }
 
       if (filters.signalType) {
-        fallbackQuery = fallbackQuery.eq("signal_type", filters.signalType)
+        fallbackQuery = fallbackQuery.eq("signal_type", filters.signalType);
       }
       
-      const { data: fallbackData, error: fallbackError } = await fallbackQuery
+      const { data: fallbackData, error: fallbackError } = await fallbackQuery;
       
       if (fallbackError) {
-        console.error("Error fetching from fallback table:", fallbackError)
-        return []
+        console.error("Error fetching from fallback table:", fallbackError);
+        return [];
       }
       
-      // Convert generated_signals format to TradingSignal format
+      // Převod záznamů z generated_signals na formát TradingSignal
       return fallbackData.map((record) => ({
         id: record.signal_id,
         type: record.signal_type as "long" | "short",
@@ -466,19 +458,18 @@ export async function getCompletedSignals(
         pair: record.pair,
         timeframe: record.timeframe,
         source: record.signal_source || "unknown",
-        status: record.status as "completed",
+        status: "completed",
         exitPrice: record.exit_price || record.entry_price,
         exitTime: record.exit_time ? new Date(record.exit_time) : new Date(record.updated_at),
-        exitType: record.exit_type as "tp" | "sl" | "manual" || "manual",
+        exitType: (record.exit_type || "manual") as "tp" | "sl" | "manual",
         profitLoss: record.profit_loss || 0,
         profitLossPercent: record.profit_loss_percent || 0,
         riskRewardRatio: record.risk_reward_ratio || 3.0,
         notes: null,
-      }))
+      }));
     }
 
-    // Convert database records to TradingSignal objects
-    console.log(`Successfully fetched ${data?.length || 0} completed signals`);
+    // Převod záznamů z databáze na objekty TradingSignal
     return data.map((record) => ({
       id: record.signal_id,
       type: record.signal_type as "long" | "short",
@@ -497,10 +488,10 @@ export async function getCompletedSignals(
       profitLossPercent: record.profit_loss_percent,
       riskRewardRatio: record.risk_reward_ratio,
       notes: record.notes,
-    }))
+    }));
   } catch (error) {
-    console.error("Error fetching completed signals:", error)
-    return []
+    console.error("Error fetching completed signals:", error);
+    return [];
   }
 }
 
