@@ -56,7 +56,6 @@ interface LiquidationContextType {
   }
   nextUpdateTime: Date | null
   historicalCandles: CandleData[]
-  // Active signals
   activeSignals: TradingSignal[]
   refreshActiveSignals: () => Promise<void>
   completeSignal: (signalId: string, exitPrice: number, exitType: "tp" | "sl" | "manual") => Promise<void>
@@ -152,7 +151,7 @@ function getNextUpdateTime(timeframe: TimeframeType): Date {
 
 // Default support and resistance levels for different timeframes
 // These will be used as fallbacks if no strong clusters are found
-const DEFAULT_LEVELS = {
+const DEFAULT_LEVELS: Record<string, Record<string, { support: number; resistance: number }>> = {
   BTCUSDT: {
     "1h": { support: 63000, resistance: 67000 },
     "30m": { support: 63500, resistance: 66500 },
@@ -651,10 +650,10 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     type: "support" | "resistance",
     fallback: number,
   ): number {
-    if (DEFAULT_LEVELS[pair as keyof typeof DEFAULT_LEVELS]) {
-      const pairDefaults = DEFAULT_LEVELS[pair as keyof typeof DEFAULT_LEVELS]
-      if (pairDefaults[timeframe as keyof typeof pairDefaults]) {
-        return pairDefaults[timeframe as keyof typeof pairDefaults][type]
+    if (DEFAULT_LEVELS[pair]) {
+      const pairDefaults = DEFAULT_LEVELS[pair]
+      if (pairDefaults[timeframe]) {
+        return pairDefaults[timeframe][type]
       }
     }
     return fallback
