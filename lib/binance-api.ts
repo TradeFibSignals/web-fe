@@ -33,18 +33,13 @@ export interface TickerData {
   source?: string
 }
 
-// API endpoints to try in order of preference
+// API endpoints to try in order of preference - only including confirmed working endpoints
 const BINANCE_ENDPOINTS = [
-  // Prioritize futures endpoints first
+  // Prioritize futures endpoint first - confirmed working
   { name: 'binance-futures-fapi-v1', url: 'https://fapi.binance.com/fapi/v1' },
-  { name: 'binance-futures-fapi-v1-backup', url: 'https://fapi1.binance.com/fapi/v1' },
-  { name: 'binance-futures-fapi-v1-backup2', url: 'https://fapi2.binance.com/fapi/v1' },
-  { name: 'binance-futures-fapi-v1-backup3', url: 'https://fapi3.binance.com/fapi/v1' },
-  // Keep spot endpoints as fallbacks, but with lower priority
+  // Two spot endpoints as fallbacks - confirmed working
   { name: 'binance-api-v3', url: 'https://api.binance.com/api/v3' },
   { name: 'binance-spot-v3', url: 'https://api1.binance.com/api/v3' },
-  { name: 'binance-api-eu', url: 'https://api-eu.binance.com/api/v3' },
-  { name: 'binance-futures-dapi-v1', url: 'https://dapi.binance.com/dapi/v1' }
 ];
 
 // Alternative data source
@@ -415,9 +410,8 @@ export async function fetchKlines(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       
-      // Make the request - use the correct path based on whether it's a spot or futures endpoint
-      // For futures endpoints, use /klines directly as the endpoint URL already contains /fapi/v1 
-      // For spot endpoints, we need to add /klines to the path
+      // Use the correct path based on whether it's a spot or futures endpoint
+      const isSpotEndpoint = binanceEndpoint.includes('/api/v3');
       const url = `${binanceEndpoint}/klines?${params.toString()}`;
       console.log(`Making request to: ${url}`);
       
@@ -947,6 +941,107 @@ export async function fetchCandlestickData(
     return await fetchTimeframeCandles(symbol, timeframe, limit);
   } catch (error) {
     console.error(`Error in fetchCandlestickData for ${symbol} ${timeframe}:`, error);
+    throw error;
+  }
+}
+
+// Main function to fetch comprehensive data for UI display
+export async function fetchBinanceData(
+  timeframe: string = "15m",
+  symbol: string = "BTCUSDT",
+  useStableData: boolean = false
+): Promise<{
+  liquidationData: any[];
+  priceData: any[];
+  currentPrice: number;
+  priceChangePercent: number;
+  lpi: number;
+  lio: number;
+}> {
+  try {
+    // Fetch historical candles
+    const candles = await fetchTimeframeCandles(symbol, timeframe, 100);
+    
+    // Get current price from the latest candle
+    const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+    
+    // Get ticker data for price change percentage
+    const ticker = await fetchBinanceTicker(symbol);
+    const priceChangePercent = parseFloat(ticker.priceChangePercent);
+    
+    // Create simple price data from candles
+    const priceData = candles.map(candle => ({
+      price: candle.close,
+      time: candle.time * 1000 // Convert back to milliseconds for UI
+    }));
+    
+    // In real implementation, you would fetch liquidation data from liquidation API
+    // For now, return an empty array as we don't have the liquidation data source
+    const liquidationData: any[] = [];
+    
+    // Return fake LPI/LIO values - these should come from real calculations in production
+    const lpi = 50; // Liquidation Pressure Index
+    const lio = 50; // Liquidation Imbalance Oscillator
+    
+    return {
+      liquidationData,
+      priceData,
+      currentPrice,
+      priceChangePercent,
+      lpi,
+      lio
+    };
+  } catch (error) {
+    console.error(`Error in fetchBinanceData for ${symbol} ${timeframe}:`, error);
+    throw error;
+  }
+}
+
+// Fetch available trading pairs
+export async function fetchAvailablePairs(): Promise<string[]> {
+  try {
+    const binanceEndpoint = await findWorkingBinanceEndpoint();
+    
+    if (!binanceEndpoint) {
+      throw new Error("No working Binance endpoints available");
+    }
+    
+    // Decide which endpoint path to use based on spot vs futures
+    const isFuturesEndpoint = binanceEndpoint.includes('/fapi/v1');
+    const exchangeInfoPath = isFuturesEndpoint ? '/exchangeInfo' : '/exchangeInfo';
+    
+    const response = await fetchWithTimeout(
+      `${binanceEndpoint}${exchangeInfoPath}`, 
+      {
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      },
+      CONFIG.API_TIMEOUT
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch exchange info: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (!data.symbols || !Array.isArray(data.symbols)) {
+      throw new Error("Invalid exchange info response");
+    }
+    
+    // Extract pairs ending with USDT for perpetuals
+    const pairs = data.symbols
+      .filter((symbol: any) => 
+        symbol.symbol.endsWith('USDT') && 
+        (isFuturesEndpoint ? symbol.contractType === 'PERPETUAL' : true)
+      )
+      .map((symbol: any) => symbol.symbol);
+    
+    return pairs;
+  } catch (error) {
+    console.error("Error fetching available pairs:", error instanceof Error ? error.message : String(error));
     throw error;
   }
 }
