@@ -146,4 +146,29 @@ export async function GET(request: NextRequest) {
             error: createError.message
           });
         } else {
-          console.log("Tables created or verified success
+          console.log("Tables created or verified successfully");
+          results.actions.push({
+            name: "create_tables",
+            success: true,
+            message: "Tables created or verified successfully"
+          });
+        }
+      } catch (error) {
+        console.error("Error creating database tables:", error);
+        results.actions.push({
+          name: "create_tables",
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    
+    return NextResponse.json(results);
+  } catch (error) {
+    console.error("Error processing fix request:", error);
+    return NextResponse.json({ 
+      error: "Internal server error", 
+      message: error instanceof Error ? error.message : String(error) 
+    }, { status: 500 });
+  }
+}
