@@ -385,7 +385,46 @@ export async function fetchKlines(
       }
     }
 
-    // Try Binance API directly
+    // When in browser, try our local API first
+    if (isBrowser) {
+      try {
+        console.log(`Fetching candles from local API for ${symbol} ${interval}`);
+        const params = new URLSearchParams();
+        params.append('symbol', symbol);
+        params.append('interval', interval);
+        params.append('limit', limit.toString());
+        
+        if (endTime) {
+          params.append('endTime', endTime.toString());
+        }
+
+        const response = await fetch(`/api/candles?${params.toString()}`, {
+          headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data && Array.isArray(data) && data.length > 0) {
+            // Cache the result
+            if (typeof dataCache !== 'undefined' && dataCache.set) {
+              dataCache.set(cacheKey, {
+                data: data,
+                timestamp: Date.now()
+              });
+            }
+            return data;
+          }
+        }
+      } catch (localApiError) {
+        console.error("Error fetching from local API:", localApiError);
+        // Continue to direct Binance fetching if local API fails
+      }
+    }
+
+    // Try Binance API directly - this will work on the server side
     try {
       // Get working Binance endpoint 
       const binanceEndpoint = await findWorkingBinanceEndpoint();
@@ -495,43 +534,45 @@ export async function fetchTickerData(symbol = "BTCUSDT"): Promise<TickerData> {
     symbol = `${symbol}USDT`
   }
 
-  // Use our internal API route first
-  try {
-    const response = await fetchWithTimeout(
-      `/api/ticker?symbol=${symbol}`, 
-      {
-        headers: {
-          Accept: "application/json",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          Pragma: "no-cache",
+  // In browser, use our internal API route first
+  if (isBrowser) {
+    try {
+      const response = await fetchWithTimeout(
+        `/api/ticker?symbol=${symbol}`, 
+        {
+          headers: {
+            Accept: "application/json",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            Pragma: "no-cache",
+          }
+        }, 
+        5000
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+
+        // Check if we got valid data
+        if (data && data.price) {
+          // Store the data in localStorage for future fallback
+          safeStorage.setItem(`last${symbol}Price`, data.price);
+          safeStorage.setItem(`last${symbol}Change`, data.priceChangePercent || "0.00");
+
+          return {
+            symbol: data.symbol || symbol,
+            price: data.price,
+            priceChangePercent: data.priceChangePercent || "0.00",
+            volume: data.volume || "0",
+            source: data.source || "api",
+          };
         }
-      }, 
-      5000
-    );
-
-    if (response.ok) {
-      const data = await response.json();
-
-      // Check if we got valid data
-      if (data && data.price) {
-        // Store the data in localStorage for future fallback
-        safeStorage.setItem(`last${symbol}Price`, data.price);
-        safeStorage.setItem(`last${symbol}Change`, data.priceChangePercent || "0.00");
-
-        return {
-          symbol: data.symbol || symbol,
-          price: data.price,
-          priceChangePercent: data.priceChangePercent || "0.00",
-          volume: data.volume || "0",
-          source: data.source || "api",
-        };
       }
+    } catch (apiError) {
+      console.error("Error fetching ticker data from API:", apiError instanceof Error ? apiError.message : String(apiError));
     }
-  } catch (apiError) {
-    console.error("Error fetching ticker data from API:", apiError instanceof Error ? apiError.message : String(apiError));
   }
 
-  // If internal API fails, try Binance directly
+  // If internal API fails or we're on server side, try Binance directly
   try {
     const binanceEndpoint = await findWorkingBinanceEndpoint();
     
@@ -915,7 +956,7 @@ export function createKlineWebSocket(
 }
 
 // Function for fetching historical candles with specialized error handling
-export async function fetchTimeframeCandles(
+export async function fetchHistoricalCandles(
   symbol = "BTCUSDT",
   timeframe = "15m",
   limit = 100
@@ -946,6 +987,21 @@ export async function fetchCandlestickData(
   }
 }
 
+// This function matches fetchHistoricalCandles, but is named differently - needed for backward compatibility
+export async function fetchTimeframeCandles(
+  symbol = "BTCUSDT",
+  timeframe = "15m",
+  limit = 100
+): Promise<CandleData[]> {
+  const interval = timeframeToInterval(timeframe);
+  try {
+    return await fetchKlines(interval, limit, undefined, symbol);
+  } catch (error) {
+    console.error(`Error in fetchTimeframeCandles for ${symbol} ${timeframe}:`, error);
+    throw error;
+  }
+}
+
 // Main function to fetch comprehensive data for UI display
 export async function fetchBinanceData(
   timeframe: string = "15m",
@@ -967,7 +1023,7 @@ export async function fetchBinanceData(
     const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
     
     // Get ticker data for price change percentage
-    const ticker = await fetchBinanceTicker(symbol);
+    const ticker = await fetchTickerData(symbol);
     const priceChangePercent = parseFloat(ticker.priceChangePercent);
     
     // Create simple price data from candles
@@ -1001,6 +1057,27 @@ export async function fetchBinanceData(
 // Fetch available trading pairs
 export async function fetchAvailablePairs(): Promise<string[]> {
   try {
+    // In browser, try our local API first to avoid CORS issues
+    if (isBrowser) {
+      try {
+        const response = await fetch('/api/pairs', {
+          headers: {
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && Array.isArray(data.pairs) && data.pairs.length > 0) {
+            return data.pairs;
+          }
+        }
+      } catch (localApiError) {
+        console.error("Error fetching pairs from local API:", localApiError);
+      }
+    }
+    
+    // Server-side or fallback - try direct Binance API
     const binanceEndpoint = await findWorkingBinanceEndpoint();
     
     if (!binanceEndpoint) {
@@ -1043,6 +1120,11 @@ export async function fetchAvailablePairs(): Promise<string[]> {
     return pairs;
   } catch (error) {
     console.error("Error fetching available pairs:", error instanceof Error ? error.message : String(error));
-    throw error;
+    
+    // Return default pairs as fallback
+    return [
+      "BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "SOLUSDT", 
+      "DOTUSDT", "DOGEUSDT", "MATICUSDT", "LINKUSDT", "AVAXUSDT"
+    ];
   }
 }
