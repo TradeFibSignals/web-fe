@@ -35,9 +35,10 @@ export interface TickerData {
 
 // API endpoints to try in order of preference - only including confirmed working endpoints
 const BINANCE_ENDPOINTS = [
-  // Prioritize futures endpoint first - confirmed working
+  // primary
+  { name: 'binance-data-api', url: 'https://data-api.binance.vision/api/v3' },
+  // fallback 
   { name: 'binance-futures-fapi-v1', url: 'https://fapi.binance.com/fapi/v1' },
-  // Two spot endpoints as fallbacks - confirmed working
   { name: 'binance-api-v3', url: 'https://api.binance.com/api/v3' },
   { name: 'binance-spot-v3', url: 'https://api1.binance.com/api/v3' },
 ];
