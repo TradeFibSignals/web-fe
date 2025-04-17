@@ -1,4 +1,3 @@
-// lib/signal-generator-service.ts
 import { supabase } from "./supabase-client";
 import { fetchTimeframeCandles, fetchCandlestickData, type CandleData } from "./binance-api";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -24,7 +23,7 @@ export interface GeneratedSignal {
   major_level?: number;
   peak_price?: number;
   peak_time?: Date;
-  fib_levels?: any;
+  fib_levels?: any[];
   risk_reward_ratio: number;
   seasonality: "bullish" | "bearish" | "neutral";
   positive_probability: number;
@@ -136,7 +135,7 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
       takeProfit = entryPrice - (stopLoss - entryPrice) * 3; // TP with 1:3 RRR
     }
     
-    // Gather all Fibonacci levels for reference
+    // Gather all Fibonacci levels for reference - Always ensure this is an array
     const priceDiff = Math.abs(relevantLevel.price - currentPrice);
     const fibLevels = [0, 23.6, 38.2, 50, 61.8, 78.6, 100].map(level => {
       const price = signalType === "long" 
@@ -158,7 +157,7 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
       major_level: relevantLevel.price,
       peak_price: currentPrice,
       peak_time: new Date(),
-      fib_levels: fibLevels,
+      fib_levels: fibLevels, // Always an array
       risk_reward_ratio: 3.0,
       seasonality,
       positive_probability: probability
@@ -262,11 +261,14 @@ export async function generateSignalsForTimeframe(
       // Save signals to database
       for (const signal of signals) {
         try {
+          // Fix: Always ensure fib_levels is an array before stringifying
+          const fibLevels = Array.isArray(signal.fib_levels) ? signal.fib_levels : [];
+          
           // Convert any Date objects to ISO strings for database compatibility
           const signalForDb = {
             ...signal,
             peak_time: signal.peak_time ? signal.peak_time.toISOString() : new Date().toISOString(),
-            fib_levels: signal.fib_levels ? JSON.stringify(signal.fib_levels) : null,
+            fib_levels: JSON.stringify(fibLevels), // Make sure we're storing a stringified array
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             status: 'active',
@@ -506,6 +508,21 @@ export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<
 
         // Check each signal
         for (const signal of signals) {
+          // Fix: Parse fib_levels from JSON to array if it's a string
+          if (signal.fib_levels && typeof signal.fib_levels === 'string') {
+            try {
+              signal.fib_levels = JSON.parse(signal.fib_levels);
+              if (!Array.isArray(signal.fib_levels)) {
+                signal.fib_levels = []; // Set to empty array if not an array
+              }
+            } catch (parseError) {
+              console.error(`Error parsing fib_levels for signal ${signal.signal_id}:`, parseError);
+              signal.fib_levels = []; // Set to empty array on parse error
+            }
+          } else if (!Array.isArray(signal.fib_levels)) {
+            signal.fib_levels = []; // Set to empty array if not an array
+          }
+          
           // Check if signal has already been activated (entry hit)
           let entryHit = signal.entry_hit;
           let entryHitTime = signal.entry_hit_time;
@@ -675,7 +692,23 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
         return [];
       }
 
-      return signals || [];
+      // Process fib_levels for each signal to ensure it's an array
+      return signals?.map(signal => {
+        // Parse fib_levels if it's a string
+        if (signal.fib_levels && typeof signal.fib_levels === 'string') {
+          try {
+            signal.fib_levels = JSON.parse(signal.fib_levels);
+            if (!Array.isArray(signal.fib_levels)) {
+              signal.fib_levels = [];
+            }
+          } catch (e) {
+            signal.fib_levels = [];
+          }
+        } else if (!Array.isArray(signal.fib_levels)) {
+          signal.fib_levels = [];
+        }
+        return signal;
+      }) || [];
     }
 
     // Try to get signals from cache
@@ -703,7 +736,23 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
         return [];
       }
 
-      return signals || [];
+      // Process fib_levels for each signal
+      return signals?.map(signal => {
+        // Parse fib_levels if it's a string
+        if (signal.fib_levels && typeof signal.fib_levels === 'string') {
+          try {
+            signal.fib_levels = JSON.parse(signal.fib_levels);
+            if (!Array.isArray(signal.fib_levels)) {
+              signal.fib_levels = [];
+            }
+          } catch (e) {
+            signal.fib_levels = [];
+          }
+        } else if (!Array.isArray(signal.fib_levels)) {
+          signal.fib_levels = [];
+        }
+        return signal;
+      }) || [];
     }
 
     // Get signals by ID from cache
@@ -731,7 +780,23 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
       return [];
     }
 
-    return signals || [];
+    // Process fib_levels for each signal
+    return signals?.map(signal => {
+      // Parse fib_levels if it's a string
+      if (signal.fib_levels && typeof signal.fib_levels === 'string') {
+        try {
+          signal.fib_levels = JSON.parse(signal.fib_levels);
+          if (!Array.isArray(signal.fib_levels)) {
+            signal.fib_levels = [];
+          }
+        } catch (e) {
+          signal.fib_levels = [];
+        }
+      } else if (!Array.isArray(signal.fib_levels)) {
+        signal.fib_levels = [];
+      }
+      return signal;
+    }) || [];
   } catch (error) {
     console.error("Error getting signals from cache:", error);
     return [];

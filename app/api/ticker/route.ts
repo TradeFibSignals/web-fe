@@ -1,90 +1,48 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
+import { type NextRequest } from "next/server";
+import { fetchBinanceTicker } from "@/lib/binance-api";
 
 export async function GET(request: NextRequest) {
   try {
-    // Get symbol from query parameters
+    // Get the symbol parameter from the URL
     const searchParams = request.nextUrl.searchParams;
-    const symbol = searchParams.get('symbol') || 'BTCUSDT';
+    const symbol = searchParams.get("symbol");
 
-    // List of endpoints to try
-    const endpoints = [
-      'https://data-api.binance.vision/api/v3',
-      'https://api.binance.com/api/v3',
-      'https://api1.binance.com/api/v3',
-      'https://fapi.binance.com/fapi/v1'
-    ];
-
-    let response = null;
-    let error = null;
-
-    // Try each endpoint until one succeeds
-    for (const endpoint of endpoints) {
-      try {
-        const url = `${endpoint}/ticker/price?symbol=${symbol}`;
-        console.log(`Attempting to fetch from: ${url}`);
-        
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json'
-          },
-          next: { revalidate: 10 } // Cache for 10 seconds
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          response = {
-            symbol: data.symbol,
-            price: data.price,
-            priceChangePercent: "0.00", // Default value as ticker endpoint doesn't include this
-            source: endpoint
-          };
-          break;
-        }
-      } catch (fetchError) {
-        error = fetchError;
-        console.error(`Error fetching from ${endpoint}:`, fetchError);
-      }
+    // Validate that a symbol was provided
+    if (!symbol) {
+      return NextResponse.json({ error: "Symbol parameter is required" }, { status: 400 });
     }
 
-    if (response) {
-      return NextResponse.json(response);
-    }
-
-    // If all endpoints failed, try to get 24hr ticker for more data
     try {
-      const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        },
-        next: { revalidate: 30 } // Cache for 30 seconds
-      });
+      // Fetch ticker data from Binance
+      const tickerData = await fetchBinanceTicker(symbol);
 
-      if (res.ok) {
-        const data = await res.json();
-        return NextResponse.json({
-          symbol: data.symbol,
-          price: data.lastPrice,
-          priceChangePercent: data.priceChangePercent,
-          volume: data.volume,
-          source: 'api.binance.com/24hr'
-        });
-      }
-    } catch (fallbackError) {
-      console.error('Error in fallback endpoint:', fallbackError);
+      // Format response in standardized structure
+      const response = {
+        symbol: tickerData.symbol,
+        price: tickerData.lastPrice,
+        priceChangePercent: tickerData.priceChangePercent,
+        volume: tickerData.quoteVolume || tickerData.volume,
+        high24h: tickerData.highPrice,
+        low24h: tickerData.lowPrice,
+        source: "binance-api",
+        timestamp: Date.now()
+      };
+
+      // Return the formatted ticker data
+      return NextResponse.json(response);
+    } catch (error) {
+      console.error(`Error fetching ticker data for ${symbol}:`, error);
+      return NextResponse.json({ 
+        error: "Failed to fetch ticker data", 
+        details: error instanceof Error ? error.message : String(error) 
+      }, { status: 500 });
     }
-
-    // Return error if all attempts failed
-    return NextResponse.json(
-      { error: 'Failed to fetch data from all endpoints', details: error?.message || 'Unknown error' },
-      { status: 500 }
-    );
   } catch (error) {
-    console.error('Error in ticker API:', error);
-    return NextResponse.json(
-      { error: 'Internal server error', message: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
+    console.error("Error in ticker API route:", error);
+    return NextResponse.json({ 
+      error: "Internal server error", 
+      details: error instanceof Error ? error.message : String(error) 
+    }, { status: 500 });
   }
 }

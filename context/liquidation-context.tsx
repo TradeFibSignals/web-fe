@@ -1,9 +1,14 @@
 "use client"
 
 import { createContext, useContext, useState, useCallback, type ReactNode, useEffect, useRef } from "react"
-import { fetchBinanceData, fetchAvailablePairs, fetchHistoricalCandles, type CandleData } from "@/lib/binance-api"
+import {
+  fetchBinanceData,
+  fetchAvailablePairs, 
+  fetchHistoricalCandles,
+  fetchTimeframeCandles,
+  type CandleData
+} from "@/lib/binance-api"
 import { binanceWebSocket } from "@/lib/websocket-service"
-// Přidám import pro služby signálů
 import { checkActiveSignals, getActiveSignals, completeSignal, cancelSignal } from "@/lib/signals-service"
 
 type TimeframeType = "5m" | "15m" | "30m" | "1h"
@@ -27,7 +32,6 @@ interface TradingSignal {
   strength: "low" | "medium" | "high"
 }
 
-// Přidám do interface LiquidationContextType
 interface LiquidationContextType {
   liquidationData: LiquidationData[]
   priceData: PriceData[]
@@ -52,9 +56,7 @@ interface LiquidationContextType {
   }
   nextUpdateTime: Date | null
   historicalCandles: CandleData[]
-  // Existující položky...
-
-  // Přidané položky pro signály
+  // Active signals
   activeSignals: TradingSignal[]
   refreshActiveSignals: () => Promise<void>
   completeSignal: (signalId: string, exitPrice: number, exitType: "tp" | "sl" | "manual") => Promise<void>
@@ -183,14 +185,13 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     shortVolumeByPrice: {},
     maxBucketVolume: 1,
   })
-  // Existující state...
-
-  // Přidaný state pro aktivní signály
+  
+  // Added state for active signals
   const [activeSignals, setActiveSignals] = useState<TradingSignal[]>([])
 
   // Use refs to store stable data for each pair
-  const stableDataRef = useRef<
-    Record<
+  const stableDataRef = useRef
+    Record
       string,
       {
         liquidationData: LiquidationData[]
@@ -250,6 +251,7 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
   const fetchHistoricalData = useCallback(async () => {
     setIsLoading(true)
     try {
+      // Explicitly use fetchHistoricalCandles or fetchTimeframeCandles from binance-api.ts
       const candles = await fetchHistoricalCandles(selectedPair, timeframe)
       setHistoricalCandles(candles)
     } catch (error) {
@@ -345,26 +347,26 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Funkce pro obnovení aktivních signálů
+  // Function for refreshing active signals
   const refreshActiveSignals = useCallback(async () => {
     await checkActiveSignals(currentPrice, selectedPair, historicalCandles)
     const signals = getActiveSignals()
     setActiveSignals(signals)
   }, [currentPrice, selectedPair, historicalCandles])
 
-  // Načtení aktivních signálů při inicializaci
+  // Load active signals on initialization
   useEffect(() => {
     refreshActiveSignals()
   }, [refreshActiveSignals])
 
-  // Kontrola signálů při změně ceny
+  // Check signals when price changes
   useEffect(() => {
     if (currentPrice > 0) {
       checkActiveSignals(currentPrice, selectedPair, historicalCandles).then(refreshActiveSignals).catch(console.error)
     }
   }, [currentPrice, selectedPair, historicalCandles, refreshActiveSignals])
 
-  // Přidání funkcí pro práci se signály
+  // Signal handling functions
   const completeSignalHandler = useCallback(
     async (signalId: string, exitPrice: number, exitType: "tp" | "sl" | "manual" = "manual") => {
       await completeSignal(signalId, exitPrice, exitType)
@@ -715,21 +717,17 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
     return clusters
   }
 
+  // Check active signals on initialization
   useEffect(() => {
-    // Existující kód...
-
-    // Zkontrolujeme aktivní signály při inicializaci
     const checkSignalsOnInit = async () => {
       const activeSignals = getActiveSignals()
       if (activeSignals.length > 0) {
-        // Pro každý aktivní signál zkontrolujeme, zda nebyl dokončen
+        // Check if each active signal has been completed
         await checkActiveSignals(currentPrice, selectedPair, historicalCandles)
       }
     }
 
     checkSignalsOnInit()
-
-    // Existující kód...
   }, [currentPrice, selectedPair, historicalCandles])
 
   return (
@@ -754,9 +752,7 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
         volumeData,
         nextUpdateTime,
         historicalCandles,
-        // Existující hodnoty...
-
-        // Přidané hodnoty pro signály
+        // Signal-related values
         activeSignals,
         refreshActiveSignals,
         completeSignal: completeSignalHandler,
