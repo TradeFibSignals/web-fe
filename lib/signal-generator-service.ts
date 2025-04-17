@@ -171,19 +171,32 @@ function generateSignals(pair: string, timeframe: string, candles: CandleData[],
   }
 }
 
-export async function generateSignalsForTimeframe(timeframe: string, client?: SupabaseClient) {
-  console.log(`Generating signals for timeframe: ${timeframe}`);
+export async function generateSignalsForTimeframe(
+  timeframe: string, 
+  symbol?: string,
+  client?: SupabaseClient
+): Promise<any[]> {
+  console.log(`Generating signals for timeframe: ${timeframe}${symbol ? `, symbol: ${symbol}` : ''}`);
 
   // Use provided client or default supabase client
   const supabaseClient = client || supabase;
 
   // Check if Supabase client is valid
   if (!supabaseClient) {
+    console.error("Supabase client is not available - check environment variables (SUPABASE_URL and SUPABASE_ANON_KEY)");
     throw new Error("Supabase client is not available");
   }
 
   // List of pairs to generate signals for
-  const pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"];
+  let pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"];
+  
+  // If a specific symbol was requested, filter to only that one
+  if (symbol) {
+    const normalizedSymbol = symbol.toUpperCase();
+    const symbolWithUsdt = normalizedSymbol.endsWith('USDT') ? normalizedSymbol : `${normalizedSymbol}USDT`;
+    pairs = [symbolWithUsdt]; // Use only the requested symbol
+  }
+
   const results = [];
 
   for (const pair of pairs) {
@@ -327,8 +340,7 @@ async function updateSignalCacheForTimeframe(
     const { error: deleteError } = await supabaseClient
       .from("signal_cache")
       .delete()
-      .eq("pair", pair)
-      .eq("timeframe", timeframe);
+      .eq("cache_key", `${pair}_${timeframe}`);
 
     if (deleteError) {
       console.error(`Error clearing cache for ${pair} ${timeframe}:`, deleteError);
@@ -338,10 +350,10 @@ async function updateSignalCacheForTimeframe(
     // Add new signals to cache
     if (signals.length > 0) {
       const cacheEntries = signals.map((signal) => ({
-        cache_key: `${pair}_${timeframe}_${signal.signal_id}`,
-        signal_id: signal.signal_id,
-        pair: signal.pair,
-        timeframe: signal.timeframe,
+        cache_key: `${pair}_${timeframe}`,
+        signal_ids: JSON.stringify([signal.signal_id]),
+        pair: pair,
+        timeframe: timeframe,
         last_updated: new Date().toISOString(),
       }));
 
@@ -572,9 +584,8 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
     // Try to get signals from cache
     const { data: cacheEntries, error: cacheError } = await supabase
       .from("signal_cache")
-      .select("signal_id")
-      .eq("pair", pair)
-      .eq("timeframe", timeframe);
+      .select("signal_ids")
+      .eq("cache_key", `${pair}_${timeframe}`);
 
     if (cacheError || !cacheEntries || cacheEntries.length === 0) {
       console.log(`No cache entries found for ${pair}_${timeframe}, fetching from database`);
@@ -598,7 +609,19 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
     }
 
     // Get signals by ID from cache
-    const signalIds = cacheEntries.map(entry => entry.signal_id);
+    const signalIds = [];
+    for (const entry of cacheEntries) {
+      if (entry.signal_ids) {
+        try {
+          const ids = JSON.parse(entry.signal_ids);
+          if (Array.isArray(ids)) {
+            signalIds.push(...ids);
+          }
+        } catch (e) {
+          console.error("Error parsing signal_ids:", e);
+        }
+      }
+    }
 
     if (signalIds.length === 0) {
       return [];
