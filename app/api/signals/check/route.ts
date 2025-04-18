@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
     const batchSize = parseInt(searchParams.get("batchSize") || "50", 10) // Default to 50 signals per batch
     const batchOffset = parseInt(searchParams.get("batchOffset") || "0", 10)
     const mode = searchParams.get("mode") || "normal" // 'normal' or 'count-only'
+    const debugMode = searchParams.get("debug") === "true" // Enable detailed debugging
     
     // Validate timeframe if provided
     if (timeframe) {
@@ -111,6 +112,9 @@ export async function GET(request: NextRequest) {
       nextBatchOffset: 0
     }
     
+    // For debug mode, collect detailed info about signals
+    const debugInfo = debugMode ? [] : undefined
+    
     // Check if there are more signals to process
     if (activeSignals && activeSignals.length === batchSize) {
       results.hasMore = true
@@ -143,29 +147,71 @@ export async function GET(request: NextRequest) {
       try {
         // Get current price for the pair (use fetchBinanceTicker directly for faster response)
         let currentPrice = 0
+        let tickerSuccess = false
+        let tickerError = null
+        
         try {
           const tickerData = await fetchBinanceTicker(signalPair)
           currentPrice = parseFloat(tickerData.lastPrice)
+          tickerSuccess = true
           console.log(`Current price for ${signalPair}: ${currentPrice}`)
         } catch (priceError) {
+          tickerError = priceError
           console.error(`Error fetching price for ${signalPair}:`, priceError)
           results.errors += signals.length
+          
+          if (debugMode) {
+            debugInfo?.push({
+              pair: signalPair,
+              ticker_error: priceError.message,
+              signals_count: signals.length
+            })
+          }
+          
           continue // Skip this pair if we can't get price
         }
         
         if (!currentPrice) {
           console.log(`Invalid current price (${currentPrice}) for ${signalPair}, skipping...`)
           results.errors += signals.length
+          
+          if (debugMode) {
+            debugInfo?.push({
+              pair: signalPair,
+              error: `Invalid current price: ${currentPrice}`,
+              signals_count: signals.length
+            })
+          }
+          
           continue
         }
         
         // Process each signal for this pair
         const updates: any[] = []
+        const pairDebugInfo = debugMode ? [] : undefined
         
         for (const signal of signals) {
           try {
+            // Debug information for this signal
+            const signalDebug = debugMode ? {
+              signal_id: signal.signal_id,
+              signal_type: signal.signal_type,
+              entry_price: signal.entry_price,
+              stop_loss: signal.stop_loss,
+              take_profit: signal.take_profit,
+              current_price: currentPrice,
+              entry_hit: signal.entry_hit,
+              status: signal.status,
+              created_at: signal.created_at,
+              // Check conditions
+              long_entry_condition: signal.signal_type === "long" && currentPrice <= signal.entry_price,
+              short_entry_condition: signal.signal_type === "short" && currentPrice >= signal.entry_price,
+              price_diff_percent: ((currentPrice - signal.entry_price) / signal.entry_price * 100).toFixed(2) + '%',
+              action: "none" // Will be updated if any action is taken
+            } : undefined
+            
             // Check if signal has already been activated (entry hit)
-            let entryHit = signal.entry_hit
+            let entryHit = signal.entry_hit || false // Ensure boolean value
             let entryHitTime = signal.entry_hit_time
             let status = signal.status
             let isCompleted = false
@@ -182,6 +228,7 @@ export async function GET(request: NextRequest) {
                   entryHit = true
                   entryHitTime = new Date().toISOString()
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "entry_hit_long"
                   console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
                 }
               } else {
@@ -190,6 +237,7 @@ export async function GET(request: NextRequest) {
                   entryHit = true
                   entryHitTime = new Date().toISOString()
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "entry_hit_short"
                   console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
                 }
               }
@@ -198,7 +246,7 @@ export async function GET(request: NextRequest) {
             // If signal is active (entry price has been hit), check TP/SL
             if (entryHit) {
               if (signal.signal_type === "long") {
-                // For long positions
+                // For long positions - TP above entry, SL below entry
                 if (currentPrice >= signal.take_profit) {
                   isCompleted = true
                   exitType = "tp"
@@ -206,6 +254,7 @@ export async function GET(request: NextRequest) {
                   exitTime = new Date()
                   status = "completed"
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "tp_hit_long"
                   console.log(`Take profit hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
                 } else if (currentPrice <= signal.stop_loss) {
                   isCompleted = true
@@ -214,10 +263,11 @@ export async function GET(request: NextRequest) {
                   exitTime = new Date()
                   status = "completed"
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "sl_hit_long"
                   console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
                 }
               } else {
-                // For short positions
+                // For short positions - TP below entry, SL above entry
                 if (currentPrice <= signal.take_profit) {
                   isCompleted = true
                   exitType = "tp"
@@ -225,6 +275,7 @@ export async function GET(request: NextRequest) {
                   exitTime = new Date()
                   status = "completed"
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "tp_hit_short"
                   console.log(`Take profit hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
                 } else if (currentPrice >= signal.stop_loss) {
                   isCompleted = true
@@ -233,6 +284,7 @@ export async function GET(request: NextRequest) {
                   exitTime = new Date()
                   status = "completed"
                   updateNeeded = true
+                  if (signalDebug) signalDebug.action = "sl_hit_short"
                   console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
                 }
               }
@@ -249,7 +301,15 @@ export async function GET(request: NextRequest) {
               exitTime = new Date()
               status = "expired"
               updateNeeded = true
+              if (signalDebug) signalDebug.action = "expired"
               console.log(`Signal expired for ${signalPair} ${signal.timeframe} ${signal.signal_type} signal`)
+            }
+            
+            // Add to debug info if in debug mode
+            if (debugMode && signalDebug) {
+              signalDebug.update_needed = updateNeeded
+              signalDebug.age_days = (signalAge / (24 * 60 * 60 * 1000)).toFixed(1)
+              pairDebugInfo?.push(signalDebug)
             }
             
             // If updates are needed, prepare the update data
@@ -302,7 +362,24 @@ export async function GET(request: NextRequest) {
           } catch (signalError) {
             console.error(`Error processing signal ${signal.signal_id}:`, signalError)
             results.errors++
+            
+            if (debugMode) {
+              pairDebugInfo?.push({
+                signal_id: signal.signal_id,
+                error: signalError.message
+              })
+            }
           }
+        }
+        
+        // Add pair debug info to overall debug info
+        if (debugMode && pairDebugInfo) {
+          debugInfo?.push({
+            pair: signalPair,
+            current_price: currentPrice,
+            signals_count: signals.length,
+            signals: pairDebugInfo
+          })
         }
         
         // Perform batch updates if any
@@ -318,6 +395,18 @@ export async function GET(request: NextRequest) {
                 console.error(`Error updating signal ${update.signal_id}:`, updateError)
                 results.errors++
                 results.updated--
+                
+                if (debugMode) {
+                  // Find and update the debug info for this signal
+                  for (const pairInfo of debugInfo || []) {
+                    if (!pairInfo.signals) continue
+                    
+                    const signalDebug = pairInfo.signals.find((s: any) => s.signal_id === update.signal_id)
+                    if (signalDebug) {
+                      signalDebug.update_error = updateError.message
+                    }
+                  }
+                }
               }
             } catch (updateError) {
               console.error(`Error updating signal:`, updateError)
@@ -329,6 +418,14 @@ export async function GET(request: NextRequest) {
       } catch (pairError) {
         console.error(`Error processing signals for ${signalPair}:`, pairError)
         results.errors += signalsByPair[signalPair].length
+        
+        if (debugMode) {
+          debugInfo?.push({
+            pair: signalPair,
+            error: pairError.message,
+            signals_count: signalsByPair[signalPair].length
+          })
+        }
       }
     }
     
@@ -346,7 +443,8 @@ export async function GET(request: NextRequest) {
         batchOffset,
         hasMore: results.hasMore,
         nextBatchOffset: results.nextBatchOffset
-      }
+      },
+      debug: debugMode ? debugInfo : undefined
     })
   } catch (error) {
     console.error("Error checking signals:", error)
