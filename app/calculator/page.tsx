@@ -1,7 +1,7 @@
 import { CalculatorContent } from "@/components/calculator-content"
 
 export const metadata = {
-  title: "Position Calculator | BTC Market Today",
+  title: "Position Calculator | Trade Fib Signals",
   description: "Calculate optimal position sizes based on your risk tolerance",
 }
 

@@ -8,7 +8,7 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           {/* Column 1 - About */}
           <div>
-            <h3 className="text-white text-lg font-bold mb-4">BTC Market Today</h3>
+            <h3 className="text-white text-lg font-bold mb-4">Trade Fib Signals</h3>
             <p className="text-gray-400 text-sm">
               Advanced Bitcoin intraday prediction and analysis tool for cryptocurrency traders.
             </p>
@@ -118,7 +118,7 @@ export function Footer() {
 
         {/* Copyright and Disclaimer */}
         <div className="mt-12 pt-8 border-t border-gray-800/50 text-center text-xs text-gray-500">
-          <p>© {new Date().getFullYear()} BTC Market Today. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Trade Fib Signals. All rights reserved.</p>
           <p className="mt-2">This website is for informational purposes only. Not financial advice.</p>
         </div>
       </div>

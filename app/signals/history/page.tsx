@@ -3,7 +3,7 @@ import { HeaderNav } from "@/components/header-nav"
 import { Footer } from "@/components/footer"
 
 export const metadata = {
-  title: "Signal History & Statistics | BTC Market Today",
+  title: "Signal History & Statistics | Trade Fib Signals",
   description: "View your trading signal history and performance statistics",
 }
 

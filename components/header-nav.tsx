@@ -33,7 +33,7 @@ export function HeaderNav() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
           <BarChart2 className="h-6 w-6 text-primary" />
-          <span className="font-bold text-xl">BTC Market Today</span>
+          <span className="font-bold text-xl">Trade Fib Signals</span>
         </Link>
 
         {/* Desktop Navigation */}

@@ -5,8 +5,8 @@ import { Footer } from "@/components/footer"
 import { HeaderNav } from "@/components/header-nav"
 
 export const metadata = {
-  title: "Privacy Policy - BTC Market Today",
-  description: "Privacy Policy for the BTC Market Today platform",
+  title: "Privacy Policy - Trade Fib Signals",
+  description: "Privacy Policy for the Trade Fib Signals platform",
 }
 
 export default function PrivacyPage() {
@@ -29,7 +29,7 @@ export default function PrivacyPage() {
 
           <h2>1. Introduction</h2>
           <p>
-            BTC Market Today ("we", "our", or "us") is committed to protecting your privacy. This Privacy Policy
+            Trade Fib Signals ("we", "our", or "us") is committed to protecting your privacy. This Privacy Policy
             explains how we collect, use, disclose, and safeguard your information when you use our cryptocurrency
             analysis platform.
           </p>

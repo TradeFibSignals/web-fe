@@ -5,8 +5,8 @@ import { Footer } from "@/components/footer"
 import { HeaderNav } from "@/components/header-nav"
 
 export const metadata = {
-  title: "Terms of Service - BTC Market Today",
-  description: "Terms of Service for the BTC Market Today platform",
+  title: "Terms of Service - Trade Fib Signals",
+  description: "Terms of Service for the Trade Fib Signals platform",
 }
 
 export default function TermsPage() {
@@ -29,13 +29,13 @@ export default function TermsPage() {
 
           <h2>1. Acceptance of Terms</h2>
           <p>
-            By accessing or using the BTC Market Today platform ("Service"), you agree to be bound by these Terms of
+            By accessing or using the Trade Fib Signals platform ("Service"), you agree to be bound by these Terms of
             Service. If you disagree with any part of the terms, you may not access the Service.
           </p>
 
           <h2>2. Description of Service</h2>
           <p>
-            BTC Market Today provides cryptocurrency market analysis, liquidation data visualization, and trading
+            Trade Fib Signals provides cryptocurrency market analysis, liquidation data visualization, and trading
             signals. The Service is provided "as is" and "as available" without warranties of any kind.
           </p>
 
@@ -61,13 +61,13 @@ export default function TermsPage() {
 
           <h2>5. Intellectual Property</h2>
           <p>
-            The Service and its original content, features, and functionality are owned by BTC Market Today and are
+            The Service and its original content, features, and functionality are owned by Trade Fib Signals and are
             protected by international copyright, trademark, patent, trade secret, and other intellectual property laws.
           </p>
 
           <h2>6. Limitation of Liability</h2>
           <p>
-            In no event shall BTC Market Today, its directors, employees, partners, agents, suppliers, or affiliates be
+            In no event shall Trade Fib Signals, its directors, employees, partners, agents, suppliers, or affiliates be
             liable for any indirect, incidental, special, consequential, or punitive damages, including without
             limitation, loss of profits, data, use, goodwill, or other intangible losses, resulting from your access to
             or use of or inability to access or use the Service.
