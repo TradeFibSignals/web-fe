@@ -30,96 +30,24 @@ export interface GeneratedSignal {
 }
 
 // Function to get current seasonality
-async function getCurrentSeasonality(supabaseClient): Promise<{ seasonality: "bullish" | "bearish" | "neutral"; probability: number }> {
-  try {
-    // Get current month (0-indexed)
-    const currentMonth = new Date().getMonth();
-    
-    // First try to get seasonality from seasonality_temp table in database
-    if (supabaseClient) {
-      console.log(`Fetching seasonality data for month ${currentMonth} from database...`);
-      try {
-        // Try seasonality_temp table first
-        const { data: tempData, error: tempError } = await supabaseClient
-          .from("seasonality_temp")
-          .select("probability")
-          .eq("month", currentMonth)
-          .single();
-        
-        if (!tempError && tempData && tempData.probability !== null) {
-          const probability = parseFloat(tempData.probability);
-          console.log(`Successfully fetched seasonality from seasonality_temp table: ${probability}%`);
-          
-          // Determine seasonality based on probability
-          let seasonality: "bullish" | "bearish" | "neutral";
-          if (probability >= 60) {
-            seasonality = "bullish";
-          } else if (probability <= 40) {
-            seasonality = "bearish";
-          } else {
-            seasonality = "neutral";
-          }
-          
-          return { seasonality, probability };
-        } else {
-          console.log(`No data found in seasonality_temp for month ${currentMonth}, checking seasonality_cache...`);
-          
-          // Try seasonality_cache as fallback
-          const { data: cacheData, error: cacheError } = await supabaseClient
-            .from("seasonality_cache")
-            .select("value")
-            .eq("key", `monthly_positive_prob`)
-            .single();
-            
-          if (!cacheError && cacheData && cacheData.value) {
-            // The value might be a JSON object with month keys
-            const probabilities = cacheData.value;
-            if (probabilities && probabilities[currentMonth] !== undefined) {
-              const probability = parseFloat(probabilities[currentMonth]);
-              console.log(`Found seasonality in cache: ${probability}%`);
-              
-              let seasonality: "bullish" | "bearish" | "neutral";
-              if (probability >= 60) {
-                seasonality = "bullish";
-              } else if (probability <= 40) {
-                seasonality = "bearish";
-              } else {
-                seasonality = "neutral";
-              }
-              
-              return { seasonality, probability };
-            }
-          }
-        }
-      } catch (dbError) {
-        console.error(`Error fetching seasonality from database:`, dbError);
-      }
-    }
-    
-    // Fallback to hardcoded values if database access failed
-    console.log(`Falling back to hardcoded seasonality values for month ${currentMonth}...`);
-    const monthData = historicalMonthlyReturns[currentMonth as keyof typeof historicalMonthlyReturns];
+function getCurrentSeasonality(): { seasonality: "bullish" | "bearish" | "neutral"; probability: number } {
+  const currentMonth = new Date().getMonth();
+  const monthData = historicalMonthlyReturns[currentMonth as keyof typeof historicalMonthlyReturns];
 
-    if (monthData) {
-      const returns = Object.values(monthData);
-      const positiveCount = returns.filter((ret) => ret > 0).length;
-      const probability = (positiveCount / returns.length) * 100;
+  if (monthData) {
+    const returns = Object.values(monthData);
+    const positiveCount = returns.filter((ret) => ret > 0).length;
+    const probability = (positiveCount / returns.length) * 100;
 
-      // Determine seasonality based on probability of positive returns
-      if (probability >= 60) {
-        return { seasonality: "bullish", probability };
-      } else if (probability <= 40) {
-        return { seasonality: "bearish", probability };
-      }
+    // Determine seasonality based on probability of positive returns
+    if (probability >= 60) {
+      return { seasonality: "bullish", probability };
+    } else if (probability <= 40) {
+      return { seasonality: "bearish", probability };
     }
-    
-    // Default if all lookups fail
-    console.log(`No seasonality data found, using neutral default`);
-    return { seasonality: "neutral", probability: 50 };
-  } catch (error) {
-    console.error("Error in getCurrentSeasonality:", error);
-    return { seasonality: "neutral", probability: 50 };
   }
+
+  return { seasonality: "neutral", probability: 50 };
 }
 
 // Function to analyze liquidity levels
@@ -136,20 +64,13 @@ function analyzeLiquidityLevels(candles: CandleData[]) {
   }
 }
 
-// Function to generate signals
-async function generateSignals(
-  pair: string, 
-  timeframe: string, 
-  candles: CandleData[], 
-  liquidityLevels: any,
-  supabaseClient?: SupabaseClient
-): Promise<GeneratedSignal[]> {
+// Function to generate signals - FIXED LOGIC
+function generateSignals(pair: string, timeframe: string, candles: CandleData[], liquidityLevels: any): GeneratedSignal[] {
   const signals: GeneratedSignal[] = [];
   
   try {
-    // Get current seasonality - use async version
-    const { seasonality, probability } = await getCurrentSeasonality(supabaseClient);
-    console.log(`Using seasonality for signal generation: ${seasonality} (${probability}%)`);
+    // Get current seasonality
+    const { seasonality, probability } = getCurrentSeasonality();
     
     // Find all major levels
     const majorBSL = liquidityLevels.bsl.filter((level: any) => level.isMajor);
@@ -165,22 +86,26 @@ async function generateSignals(
     let relevantLevel = null;
 
     if (signalType === "long") {
-      // For LONG signals, find lowest major SSL level
-      const sortedSSL = [...majorSSL].sort((a, b) => a.price - b.price);
+      // For LONG signals, find lowest major SSL level BELOW current price
+      const sslBelowPrice = majorSSL.filter((ssl: any) => ssl.price < currentPrice);
+      const sortedSSL = [...sslBelowPrice].sort((a, b) => b.price - a.price); // Sort descending to get closest below
       relevantLevel = sortedSSL.length > 0 ? sortedSSL[0] : null;
 
-      // If no SSL level found, try using BSL level in neutral seasonality
+      // If no valid SSL level found, try using BSL level in neutral seasonality
       if (!relevantLevel && seasonality === "neutral" && majorBSL.length > 0) {
-        relevantLevel = majorBSL.sort((a, b) => a.price - b.price)[0];
+        const bslBelowPrice = majorBSL.filter((bsl: any) => bsl.price < currentPrice);
+        relevantLevel = bslBelowPrice.sort((a, b) => b.price - a.price)[0]; // Get highest BSL below price
       }
     } else {
-      // For SHORT signals, find highest major BSL level
-      const sortedBSL = [...majorBSL].sort((a, b) => b.price - a.price);
+      // For SHORT signals, find highest major BSL level ABOVE current price
+      const bslAbovePrice = majorBSL.filter((bsl: any) => bsl.price > currentPrice);
+      const sortedBSL = [...bslAbovePrice].sort((a, b) => a.price - b.price); // Sort ascending to get closest above
       relevantLevel = sortedBSL.length > 0 ? sortedBSL[0] : null;
 
-      // If no BSL level found, try using SSL level in neutral seasonality
+      // If no valid BSL level found, try using SSL level in neutral seasonality
       if (!relevantLevel && seasonality === "neutral" && majorSSL.length > 0) {
-        relevantLevel = majorSSL.sort((a, b) => b.price - a.price)[0];
+        const sslAbovePrice = majorSSL.filter((ssl: any) => ssl.price > currentPrice);
+        relevantLevel = sslAbovePrice.sort((a, b) => a.price - b.price)[0]; // Get lowest SSL above price
       }
     }
     
@@ -199,19 +124,34 @@ async function generateSignals(
     // Create base signal
     const signalId = uuidv4();
     
-    // Create conservative entry and SL/TP
+    // Create proper entry, stop loss, and take profit levels
     let entryPrice, stopLoss, takeProfit;
+    const riskRewardRatio = 3.0; // Risk:Reward ratio
     
     if (signalType === "long") {
       // For LONG positions
-      entryPrice = currentPrice * 0.985; // Entry slightly below current price
-      stopLoss = relevantLevel.price * 0.99; // SL just below major level
-      takeProfit = entryPrice + (entryPrice - stopLoss) * 3; // TP with 1:3 RRR
+      // Entry slightly below current price
+      entryPrice = currentPrice * 0.985;
+      
+      // Stop loss must be BELOW the entry price
+      // Use the major level as a reference, but ensure SL is below entry
+      stopLoss = Math.min(entryPrice * 0.99, relevantLevel.price * 0.99);
+      
+      // Take profit must be ABOVE the entry price
+      const riskAmount = entryPrice - stopLoss;
+      takeProfit = entryPrice + (riskAmount * riskRewardRatio);
     } else {
       // For SHORT positions
-      entryPrice = currentPrice * 1.015; // Entry slightly above current price
-      stopLoss = relevantLevel.price * 1.01; // SL just above major level
-      takeProfit = entryPrice - (stopLoss - entryPrice) * 3; // TP with 1:3 RRR
+      // Entry slightly above current price
+      entryPrice = currentPrice * 1.015;
+      
+      // Stop loss must be ABOVE the entry price
+      // Use the major level as a reference, but ensure SL is above entry
+      stopLoss = Math.max(entryPrice * 1.01, relevantLevel.price * 1.01);
+      
+      // Take profit must be BELOW the entry price
+      const riskAmount = stopLoss - entryPrice;
+      takeProfit = entryPrice - (riskAmount * riskRewardRatio);
     }
     
     // Gather all Fibonacci levels for reference - Always ensure this is an array
@@ -223,7 +163,22 @@ async function generateSignals(
       return { level, price };
     });
     
-    // Add signal to results with the actual seasonality data from database
+    // Final validation of price levels
+    if (signalType === "long") {
+      // For long positions, ensure TP > Entry > SL
+      if (!(takeProfit > entryPrice && entryPrice > stopLoss)) {
+        console.warn(`Invalid long signal prices: Entry=${entryPrice}, SL=${stopLoss}, TP=${takeProfit}`);
+        return signals;
+      }
+    } else {
+      // For short positions, ensure TP < Entry < SL
+      if (!(takeProfit < entryPrice && entryPrice < stopLoss)) {
+        console.warn(`Invalid short signal prices: Entry=${entryPrice}, SL=${stopLoss}, TP=${takeProfit}`);
+        return signals;
+      }
+    }
+    
+    // Add signal to results
     signals.push({
       signal_id: signalId,
       signal_type: signalType,
@@ -237,7 +192,7 @@ async function generateSignals(
       peak_price: currentPrice,
       peak_time: new Date(),
       fib_levels: fibLevels, // Always an array
-      risk_reward_ratio: 3.0,
+      risk_reward_ratio: riskRewardRatio,
       seasonality,
       positive_probability: probability
     });
@@ -323,10 +278,10 @@ export async function generateSignalsForTimeframe(
         continue; // Skip to next pair
       }
 
-      // Generate signals based on liquidity levels - now using async version and passing supabaseClient
+      // Generate signals based on liquidity levels
       let signals;
       try {
-        signals = await generateSignals(pair, timeframe, candlestickData, liquidityLevels, supabaseClient);
+        signals = generateSignals(pair, timeframe, candlestickData, liquidityLevels);
         console.log(`Generated ${signals.length} signals for ${pair}`);
       } catch (signalError) {
         console.error(`Error generating signals for ${pair}:`, signalError);
@@ -358,9 +313,7 @@ export async function generateSignalsForTimeframe(
             signal_id: signalForDb.signal_id,
             pair: signalForDb.pair,
             timeframe: signalForDb.timeframe,
-            signal_type: signalForDb.signal_type,
-            seasonality: signalForDb.seasonality,
-            positive_probability: signalForDb.positive_probability
+            signal_type: signalForDb.signal_type
           });
 
           // First check if signal with this ID already exists
