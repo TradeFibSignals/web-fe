@@ -1,9 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSignalsForTimeframe } from '@/lib/signal-generator-service';
 import { supabase } from '@/lib/supabase-client';
+import { getMonthlyPositiveProb } from '@/lib/seasonality-cache';
 
 // Symbols we'll process by default
 const SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LINK', 'LTC'];
+
+// Helper function to prime the seasonality data
+async function ensureSeasonalityDataLoaded() {
+  try {
+    if (!supabase) return;
+    
+    // First check if seasonality_temp table has data for current month
+    const currentMonth = new Date().getMonth();
+    const { data, error } = await supabase
+      .from("seasonality_temp")
+      .select("probability")
+      .eq("month", currentMonth)
+      .single();
+    
+    // If data exists, we're good
+    if (!error && data) {
+      console.log(`Seasonality data for month ${currentMonth} exists in database: ${data.probability}%`);
+      return;
+    }
+    
+    // If not, try to get it from seasonality-data.ts via seasonality-cache.ts
+    console.log(`Seasonality data for month ${currentMonth} not found, attempting to load from cache...`);
+    const monthlyProbs = await getMonthlyPositiveProb();
+    
+    if (monthlyProbs && monthlyProbs[currentMonth] !== undefined) {
+      const probability = monthlyProbs[currentMonth];
+      
+      // Insert or update the value in seasonality_temp
+      const { error: upsertError } = await supabase
+        .from("seasonality_temp")
+        .upsert({
+          month: currentMonth,
+          probability: probability,
+          created_at: new Date().toISOString()
+        });
+      
+      if (upsertError) {
+        console.error(`Error upserting seasonality data:`, upsertError);
+      } else {
+        console.log(`Successfully updated seasonality_temp for month ${currentMonth} with probability ${probability}%`);
+      }
+    }
+  } catch (error) {
+    console.error(`Error ensuring seasonality data:`, error);
+  }
+}
 
 // GET handler for the API route
 export async function GET(request: NextRequest) {
@@ -17,6 +64,9 @@ export async function GET(request: NextRequest) {
         error: 'Supabase client not available. Check your environment variables.' 
       }, { status: 500 });
     }
+    
+    // Ensure seasonality data is loaded
+    await ensureSeasonalityDataLoaded();
     
     // Get URL parameters
     const searchParams = request.nextUrl.searchParams;
