@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server"
 import { type NextRequest } from "next/server"
-import { checkAllActiveSignals } from "@/lib/signal-checker-service"
+import * as signalGeneratorService from "@/lib/signal-generator-service"
 import { supabase } from "@/lib/supabase-client"
+import { fetchBinanceTicker } from "@/lib/binance-api"
 
-/**
- * Validates the provided API key
- * @param request The incoming request to validate
- * @returns Boolean indicating whether the API key is valid
- */
+// Function to validate API key
 const validateApiKey = (request: NextRequest) => {
   const authHeader = request.headers.get("authorization")
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -18,13 +15,6 @@ const validateApiKey = (request: NextRequest) => {
   return apiKey === validApiKey
 }
 
-/**
- * GET endpoint for checking active trading signals
- * 
- * Accepts query parameters:
- * - timeframe: Filter by specific timeframe
- * - pair: Filter by specific trading pair
- */
 export async function GET(request: NextRequest) {
   // Authenticate the request
   if (!validateApiKey(request)) {
@@ -32,18 +22,19 @@ export async function GET(request: NextRequest) {
   }
   
   try {
-    // Get timeframe and pair from query params
+    // Get query parameters
     const { searchParams } = new URL(request.url)
     const timeframe = searchParams.get("timeframe")
     const pair = searchParams.get("pair")
+    const batchSize = parseInt(searchParams.get("batchSize") || "50", 10) // Default to 50 signals per batch
+    const batchOffset = parseInt(searchParams.get("batchOffset") || "0", 10)
+    const mode = searchParams.get("mode") || "normal" // 'normal' or 'count-only'
     
     // Validate timeframe if provided
     if (timeframe) {
       const validTimeframes = ["5m", "15m", "30m", "1h"]
       if (!validTimeframes.includes(timeframe)) {
-        return NextResponse.json({ 
-          error: "Invalid timeframe. Must be one of: 5m, 15m, 30m, 1h" 
-        }, { status: 400 })
+        return NextResponse.json({ error: "Invalid timeframe. Must be one of: 5m, 15m, 30m, 1h" }, { status: 400 })
       }
     }
     
@@ -55,12 +46,291 @@ export async function GET(request: NextRequest) {
     // Start time for performance tracking
     const startTime = Date.now()
     
-    console.log(`Starting signal check for${timeframe ? ` timeframe: ${timeframe}` : ''}${pair ? ` and pair: ${pair}` : ''}`);
+    // For count-only mode, just return the total number of active signals
+    if (mode === "count-only") {
+      let query = supabase.from("generated_signals").select("id", { count: "exact" }).eq("status", "active")
+      
+      if (timeframe) {
+        query = query.eq("timeframe", timeframe)
+      }
+      
+      if (pair) {
+        query = query.eq("pair", pair)
+      }
+      
+      const { count, error } = await query
+      
+      if (error) {
+        console.error("Error counting signals:", error)
+        return NextResponse.json({ error: "Failed to count signals" }, { status: 500 })
+      }
+      
+      return NextResponse.json({
+        success: true,
+        count: count || 0,
+        timeframe: timeframe || "all",
+        pair: pair || "all",
+        executionTime: Date.now() - startTime
+      })
+    }
     
-    // The signal checker service now uses our OHLC database
-    // We no longer need to pass timeframe/pair as filters since all pairs
-    // are stored in the same database and filtering happens via SQL queries
-    const result = await checkAllActiveSignals();
+    // For normal mode, process signals in batches
+    // Get active signals with pagination
+    let query = supabase
+      .from("generated_signals")
+      .select("*")
+      .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .range(batchOffset, batchOffset + batchSize - 1)
+    
+    if (timeframe) {
+      query = query.eq("timeframe", timeframe)
+    }
+    
+    if (pair) {
+      query = query.eq("pair", pair)
+    }
+    
+    const { data: activeSignals, error, count } = await query
+    
+    if (error) {
+      console.error("Error fetching active signals:", error)
+      return NextResponse.json({ error: "Failed to fetch signals" }, { status: 500 })
+    }
+    
+    console.log(`Processing batch of ${activeSignals?.length || 0} signals (offset: ${batchOffset})`);
+    
+    // Initialize counters for tracking updates
+    const results = {
+      checked: activeSignals?.length || 0,
+      updated: 0,
+      completed: 0,
+      expired: 0,
+      errors: 0,
+      hasMore: false,
+      nextBatchOffset: 0
+    }
+    
+    // Check if there are more signals to process
+    if (activeSignals && activeSignals.length === batchSize) {
+      results.hasMore = true
+      results.nextBatchOffset = batchOffset + batchSize
+    }
+    
+    // If no signals to check, return early
+    if (!activeSignals || activeSignals.length === 0) {
+      return NextResponse.json({
+        success: true,
+        message: `No signals to check${timeframe ? ` for timeframe: ${timeframe}` : ''}${pair ? ` and pair: ${pair}` : ''}`,
+        result: results,
+        executionTime: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      })
+    }
+    
+    // Group signals by pair for more efficient processing
+    const signalsByPair: Record<string, any[]> = {}
+    
+    activeSignals.forEach((signal) => {
+      if (!signalsByPair[signal.pair]) {
+        signalsByPair[signal.pair] = []
+      }
+      signalsByPair[signal.pair].push(signal)
+    })
+    
+    // Process signals for each pair
+    for (const [signalPair, signals] of Object.entries(signalsByPair)) {
+      try {
+        // Get current price for the pair (use fetchBinanceTicker directly for faster response)
+        let currentPrice = 0
+        try {
+          const tickerData = await fetchBinanceTicker(signalPair)
+          currentPrice = parseFloat(tickerData.lastPrice)
+          console.log(`Current price for ${signalPair}: ${currentPrice}`)
+        } catch (priceError) {
+          console.error(`Error fetching price for ${signalPair}:`, priceError)
+          results.errors += signals.length
+          continue // Skip this pair if we can't get price
+        }
+        
+        if (!currentPrice) {
+          console.log(`Invalid current price (${currentPrice}) for ${signalPair}, skipping...`)
+          results.errors += signals.length
+          continue
+        }
+        
+        // Process each signal for this pair
+        const updates: any[] = []
+        
+        for (const signal of signals) {
+          try {
+            // Check if signal has already been activated (entry hit)
+            let entryHit = signal.entry_hit
+            let entryHitTime = signal.entry_hit_time
+            let status = signal.status
+            let isCompleted = false
+            let exitType: string | null = null
+            let exitPrice: number | null = null
+            let exitTime: Date | null = null
+            let updateNeeded = false
+            
+            // Check if entry price has been hit (if not already)
+            if (!entryHit) {
+              if (signal.signal_type === "long") {
+                // For long positions - price must drop to or below entry price
+                if (currentPrice <= signal.entry_price) {
+                  entryHit = true
+                  entryHitTime = new Date().toISOString()
+                  updateNeeded = true
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                }
+              } else {
+                // For short positions - price must rise to or above entry price
+                if (currentPrice >= signal.entry_price) {
+                  entryHit = true
+                  entryHitTime = new Date().toISOString()
+                  updateNeeded = true
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                }
+              }
+            }
+            
+            // If signal is active (entry price has been hit), check TP/SL
+            if (entryHit) {
+              if (signal.signal_type === "long") {
+                // For long positions
+                if (currentPrice >= signal.take_profit) {
+                  isCompleted = true
+                  exitType = "tp"
+                  exitPrice = signal.take_profit
+                  exitTime = new Date()
+                  status = "completed"
+                  updateNeeded = true
+                  console.log(`Take profit hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                } else if (currentPrice <= signal.stop_loss) {
+                  isCompleted = true
+                  exitType = "sl"
+                  exitPrice = signal.stop_loss
+                  exitTime = new Date()
+                  status = "completed"
+                  updateNeeded = true
+                  console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                }
+              } else {
+                // For short positions
+                if (currentPrice <= signal.take_profit) {
+                  isCompleted = true
+                  exitType = "tp"
+                  exitPrice = signal.take_profit
+                  exitTime = new Date()
+                  status = "completed"
+                  updateNeeded = true
+                  console.log(`Take profit hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                } else if (currentPrice >= signal.stop_loss) {
+                  isCompleted = true
+                  exitType = "sl"
+                  exitPrice = signal.stop_loss
+                  exitTime = new Date()
+                  status = "completed"
+                  updateNeeded = true
+                  console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                }
+              }
+            }
+            
+            // Check signal expiration (if older than 7 days and not activated)
+            const signalAge = Date.now() - new Date(signal.created_at).getTime()
+            const maxSignalAge = 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+            
+            if (!entryHit && signalAge > maxSignalAge) {
+              isCompleted = true
+              exitType = "expired"
+              exitPrice = currentPrice
+              exitTime = new Date()
+              status = "expired"
+              updateNeeded = true
+              console.log(`Signal expired for ${signalPair} ${signal.timeframe} ${signal.signal_type} signal`)
+            }
+            
+            // If updates are needed, prepare the update data
+            if (updateNeeded) {
+              const updateData: any = {
+                entry_hit: entryHit,
+                status,
+                updated_at: new Date().toISOString()
+              }
+              
+              if (entryHit && !signal.entry_hit) {
+                updateData.entry_hit_time = entryHitTime
+              }
+              
+              if (isCompleted) {
+                updateData.exit_type = exitType
+                updateData.exit_price = exitPrice
+                updateData.exit_time = exitTime?.toISOString()
+                
+                // Calculate P&L
+                let profitLoss = 0
+                
+                if (signal.signal_type === "long") {
+                  profitLoss = exitPrice! - signal.entry_price
+                } else {
+                  profitLoss = signal.entry_price - exitPrice!
+                }
+                
+                updateData.profit_loss = profitLoss
+                updateData.profit_loss_percent = (profitLoss / signal.entry_price) * 100
+              }
+              
+              // Add to batch updates
+              updates.push({
+                id: signal.id,
+                signal_id: signal.signal_id,
+                updateData
+              })
+              
+              if (isCompleted) {
+                if (exitType === "expired") {
+                  results.expired++
+                } else {
+                  results.completed++
+                }
+              }
+              
+              results.updated++
+            }
+          } catch (signalError) {
+            console.error(`Error processing signal ${signal.signal_id}:`, signalError)
+            results.errors++
+          }
+        }
+        
+        // Perform batch updates if any
+        if (updates.length > 0) {
+          for (const update of updates) {
+            try {
+              const { error: updateError } = await supabase
+                .from("generated_signals")
+                .update(update.updateData)
+                .eq("signal_id", update.signal_id)
+              
+              if (updateError) {
+                console.error(`Error updating signal ${update.signal_id}:`, updateError)
+                results.errors++
+                results.updated--
+              }
+            } catch (updateError) {
+              console.error(`Error updating signal:`, updateError)
+              results.errors++
+              results.updated--
+            }
+          }
+        }
+      } catch (pairError) {
+        console.error(`Error processing signals for ${signalPair}:`, pairError)
+        results.errors += signalsByPair[signalPair].length
+      }
+    }
     
     // Calculate execution time
     const executionTime = Date.now() - startTime
@@ -68,9 +338,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: `Signals checked and updated${timeframe ? ` for timeframe: ${timeframe}` : ''}${pair ? ` and pair: ${pair}` : ''}`,
-      result,
+      result: results,
       executionTime,
       timestamp: new Date().toISOString(),
+      batchInfo: {
+        batchSize,
+        batchOffset,
+        hasMore: results.hasMore,
+        nextBatchOffset: results.nextBatchOffset
+      }
     })
   } catch (error) {
     console.error("Error checking signals:", error)
