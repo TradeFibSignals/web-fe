@@ -456,33 +456,55 @@ async function cleanupOldCacheEntriesForTimeframe(timeframe: string, supabaseCli
 }
 
 // Function to check and update signal statuses
-export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<void> {
+export async function checkAndUpdateSignalStatuses(
+  timeframe?: string,
+  pair?: string
+): Promise<{
+  checked: number;
+  updated: number;
+  completed: number;
+  expired: number;
+  errors: number;
+}> {
   try {
-    console.log(`Checking and updating signal statuses${timeframe ? ` for ${timeframe} timeframe` : ""}...`);
+    console.log(`Checking and updating signal statuses${timeframe ? ` for ${timeframe} timeframe` : ""}${pair ? ` and ${pair} pair` : ""}...`);
 
     if (!supabase) {
       console.error("Supabase client is not available for signal status update");
-      return;
+      throw new Error("Supabase client not available");
     }
 
     // Get all active signals
     let query = supabase.from("generated_signals").select("*").eq("status", "active");
 
-    // If timeframe is specified, filter by it
+    // Apply filters if provided
     if (timeframe) {
       query = query.eq("timeframe", timeframe);
+    }
+    
+    if (pair) {
+      query = query.eq("pair", pair);
     }
 
     const { data: activeSignals, error } = await query;
 
     if (error) {
       console.error("Error fetching active signals:", error);
-      return;
+      throw error;
     }
 
     console.log(`Found ${activeSignals?.length || 0} active signals to check`);
 
-    // Group signals by pair
+    // Initialize counters for tracking updates
+    const results = {
+      checked: activeSignals?.length || 0,
+      updated: 0,
+      completed: 0,
+      expired: 0,
+      errors: 0
+    };
+
+    // Group signals by pair for more efficient processing
     const signalsByPair: Record<string, any[]> = {};
 
     activeSignals?.forEach((signal) => {
@@ -493,169 +515,195 @@ export async function checkAndUpdateSignalStatuses(timeframe?: string): Promise<
     });
 
     // Process signals for each pair
-    for (const [pair, signals] of Object.entries(signalsByPair)) {
+    for (const [signalPair, signals] of Object.entries(signalsByPair)) {
       try {
-        // Get current price and historical candles for the pair
-        const currentPriceData = await fetchTimeframeCandles(pair, "1m", 1);
+        // Get current price for the pair
+        const currentPriceData = await fetchTimeframeCandles(signalPair, "1m", 1);
 
         if (!currentPriceData || currentPriceData.length === 0) {
-          console.log(`No current price data available for ${pair}, skipping...`);
+          console.log(`No current price data available for ${signalPair}, skipping...`);
           continue;
         }
 
         const currentPrice = currentPriceData[0].close;
-        console.log(`Current price for ${pair}: ${currentPrice}`);
+        console.log(`Current price for ${signalPair}: ${currentPrice}`);
 
-        // Check each signal
+        // Check each signal for the pair
         for (const signal of signals) {
-          // Fix: Parse fib_levels from JSON to array if it's a string
-          if (signal.fib_levels && typeof signal.fib_levels === 'string') {
-            try {
-              signal.fib_levels = JSON.parse(signal.fib_levels);
-              if (!Array.isArray(signal.fib_levels)) {
-                signal.fib_levels = []; // Set to empty array if not an array
+          try {
+            // Fix: Parse fib_levels from JSON to array if it's a string
+            if (signal.fib_levels && typeof signal.fib_levels === 'string') {
+              try {
+                signal.fib_levels = JSON.parse(signal.fib_levels);
+                if (!Array.isArray(signal.fib_levels)) {
+                  signal.fib_levels = []; // Set to empty array if not an array
+                }
+              } catch (parseError) {
+                console.error(`Error parsing fib_levels for signal ${signal.signal_id}:`, parseError);
+                signal.fib_levels = []; // Set to empty array on parse error
               }
-            } catch (parseError) {
-              console.error(`Error parsing fib_levels for signal ${signal.signal_id}:`, parseError);
-              signal.fib_levels = []; // Set to empty array on parse error
+            } else if (!Array.isArray(signal.fib_levels)) {
+              signal.fib_levels = []; // Set to empty array if not an array
             }
-          } else if (!Array.isArray(signal.fib_levels)) {
-            signal.fib_levels = []; // Set to empty array if not an array
-          }
-          
-          // Check if signal has already been activated (entry hit)
-          let entryHit = signal.entry_hit;
-          let entryHitTime = signal.entry_hit_time;
-          let status = signal.status;
-          let isCompleted = false;
-          let exitType: string | null = null;
-          let exitPrice: number | null = null;
-          let exitTime: Date | null = null;
+            
+            // Check if signal has already been activated (entry hit)
+            let entryHit = signal.entry_hit;
+            let entryHitTime = signal.entry_hit_time;
+            let status = signal.status;
+            let isCompleted = false;
+            let exitType: string | null = null;
+            let exitPrice: number | null = null;
+            let exitTime: Date | null = null;
+            let wasUpdated = false;
 
-          // First check if entry price has been hit (if not already)
-          if (!entryHit) {
-            if (signal.signal_type === "long") {
-              // For long positions - price must drop to or below entry price
-              if (currentPrice <= signal.entry_price) {
-                entryHit = true;
-                entryHitTime = new Date().toISOString();
-                console.log(`Entry hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
-              }
-            } else {
-              // For short positions - price must rise to or above entry price
-              if (currentPrice >= signal.entry_price) {
-                entryHit = true;
-                entryHitTime = new Date().toISOString();
-                console.log(`Entry hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
-              }
-            }
-          }
-
-          // If signal is active (entry price has been hit), check TP/SL
-          if (entryHit) {
-            if (signal.signal_type === "long") {
-              // For long positions
-              if (currentPrice >= signal.take_profit) {
-                isCompleted = true;
-                exitType = "tp";
-                exitPrice = signal.take_profit;
-                exitTime = new Date();
-                status = "completed";
-                console.log(`Take profit hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
-              } else if (currentPrice <= signal.stop_loss) {
-                isCompleted = true;
-                exitType = "sl";
-                exitPrice = signal.stop_loss;
-                exitTime = new Date();
-                status = "completed";
-                console.log(`Stop loss hit for ${pair} ${signal.timeframe} LONG signal at ${currentPrice}`);
-              }
-            } else {
-              // For short positions
-              if (currentPrice <= signal.take_profit) {
-                isCompleted = true;
-                exitType = "tp";
-                exitPrice = signal.take_profit;
-                exitTime = new Date();
-                status = "completed";
-                console.log(`Take profit hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
-              } else if (currentPrice >= signal.stop_loss) {
-                isCompleted = true;
-                exitType = "sl";
-                exitPrice = signal.stop_loss;
-                exitTime = new Date();
-                status = "completed";
-                console.log(`Stop loss hit for ${pair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
-              }
-            }
-          }
-
-          // Check signal expiration (if older than 7 days and not activated)
-          const signalAge = Date.now() - new Date(signal.created_at).getTime();
-          const maxSignalAge = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
-
-          if (!entryHit && signalAge > maxSignalAge) {
-            isCompleted = true;
-            exitType = "expired";
-            exitPrice = currentPrice;
-            exitTime = new Date();
-            status = "expired";
-            console.log(`Signal expired for ${pair} ${signal.timeframe} ${signal.signal_type} signal`);
-          }
-
-          // Update signal in database if there was a change
-          if (entryHit !== signal.entry_hit || status !== signal.status || isCompleted) {
-            const updateData: any = {
-              entry_hit: entryHit,
-              status,
-              updated_at: new Date().toISOString()
-            };
-
-            if (entryHit && !signal.entry_hit) {
-              updateData.entry_hit_time = entryHitTime;
-            }
-
-            if (isCompleted) {
-              updateData.exit_type = exitType;
-              updateData.exit_price = exitPrice;
-              updateData.exit_time = exitTime?.toISOString();
-
-              // Calculate P&L
-              let profitLoss = 0;
-
+            // First check if entry price has been hit (if not already)
+            if (!entryHit) {
               if (signal.signal_type === "long") {
-                profitLoss = exitPrice! - signal.entry_price;
+                // For long positions - price must drop to or below entry price
+                if (currentPrice <= signal.entry_price) {
+                  entryHit = true;
+                  entryHitTime = new Date().toISOString();
+                  wasUpdated = true;
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`);
+                }
               } else {
-                profitLoss = signal.entry_price - exitPrice!;
+                // For short positions - price must rise to or above entry price
+                if (currentPrice >= signal.entry_price) {
+                  entryHit = true;
+                  entryHitTime = new Date().toISOString();
+                  wasUpdated = true;
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
+                }
+              }
+            }
+
+            // If signal is active (entry price has been hit), check TP/SL
+            if (entryHit) {
+              if (signal.signal_type === "long") {
+                // For long positions
+                if (currentPrice >= signal.take_profit) {
+                  isCompleted = true;
+                  exitType = "tp";
+                  exitPrice = signal.take_profit;
+                  exitTime = new Date();
+                  status = "completed";
+                  wasUpdated = true;
+                  console.log(`Take profit hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`);
+                } else if (currentPrice <= signal.stop_loss) {
+                  isCompleted = true;
+                  exitType = "sl";
+                  exitPrice = signal.stop_loss;
+                  exitTime = new Date();
+                  status = "completed";
+                  wasUpdated = true;
+                  console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`);
+                }
+              } else {
+                // For short positions
+                if (currentPrice <= signal.take_profit) {
+                  isCompleted = true;
+                  exitType = "tp";
+                  exitPrice = signal.take_profit;
+                  exitTime = new Date();
+                  status = "completed";
+                  wasUpdated = true;
+                  console.log(`Take profit hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
+                } else if (currentPrice >= signal.stop_loss) {
+                  isCompleted = true;
+                  exitType = "sl";
+                  exitPrice = signal.stop_loss;
+                  exitTime = new Date();
+                  status = "completed";
+                  wasUpdated = true;
+                  console.log(`Stop loss hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
+                }
+              }
+            }
+
+            // Check signal expiration (if older than 7 days and not activated)
+            const signalAge = Date.now() - new Date(signal.created_at).getTime();
+            const maxSignalAge = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+
+            if (!entryHit && signalAge > maxSignalAge) {
+              isCompleted = true;
+              exitType = "expired";
+              exitPrice = currentPrice;
+              exitTime = new Date();
+              status = "expired";
+              wasUpdated = true;
+              console.log(`Signal expired for ${signalPair} ${signal.timeframe} ${signal.signal_type} signal`);
+            }
+
+            // Update signal in database if there was a change
+            if (wasUpdated) {
+              const updateData: any = {
+                entry_hit: entryHit,
+                status,
+                updated_at: new Date().toISOString()
+              };
+
+              if (entryHit && !signal.entry_hit) {
+                updateData.entry_hit_time = entryHitTime;
               }
 
-              updateData.profit_loss = profitLoss;
-              updateData.profit_loss_percent = (profitLoss / signal.entry_price) * 100;
+              if (isCompleted) {
+                updateData.exit_type = exitType;
+                updateData.exit_price = exitPrice;
+                updateData.exit_time = exitTime?.toISOString();
+
+                // Calculate P&L
+                let profitLoss = 0;
+
+                if (signal.signal_type === "long") {
+                  profitLoss = exitPrice! - signal.entry_price;
+                } else {
+                  profitLoss = signal.entry_price - exitPrice!;
+                }
+
+                updateData.profit_loss = profitLoss;
+                updateData.profit_loss_percent = (profitLoss / signal.entry_price) * 100;
+              }
+
+              console.log(`Updating signal ${signal.signal_id} with data:`, updateData);
+
+              // Update in database
+              const { error: updateError } = await supabase
+                .from("generated_signals")
+                .update(updateData)
+                .eq("signal_id", signal.signal_id);
+
+              if (updateError) {
+                console.error(`Error updating signal ${signal.signal_id}:`, updateError);
+                results.errors++;
+              } else {
+                console.log(`Signal ${signal.signal_id} updated successfully`);
+                results.updated++;
+                
+                if (isCompleted) {
+                  if (exitType === "expired") {
+                    results.expired++;
+                  } else {
+                    results.completed++;
+                  }
+                }
+              }
             }
-
-            console.log(`Updating signal ${signal.signal_id} with data:`, updateData);
-
-            // Update in database
-            const { error: updateError } = await supabase
-              .from("generated_signals")
-              .update(updateData)
-              .eq("signal_id", signal.signal_id);
-
-            if (updateError) {
-              console.error(`Error updating signal ${signal.signal_id}:`, updateError);
-            } else {
-              console.log(`Signal ${signal.signal_id} updated successfully`);
-            }
+          } catch (signalError) {
+            console.error(`Error processing signal ${signal.signal_id}:`, signalError);
+            results.errors++;
           }
         }
-      } catch (error) {
-        console.error(`Error processing signals for ${pair}:`, error);
+      } catch (pairError) {
+        console.error(`Error processing signals for ${signalPair}:`, pairError);
+        results.errors++;
       }
     }
 
-    console.log("Signal status check completed");
+    console.log("Signal status check completed with results:", results);
+    return results;
   } catch (error) {
     console.error("Error checking signal statuses:", error);
+    throw error;
   }
 }
 
