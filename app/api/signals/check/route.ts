@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server"
 import { type NextRequest } from "next/server"
-import * as signalGeneratorService from "@/lib/signal-generator-service"
+import { checkAllActiveSignals } from "@/lib/signal-checker-service"
 import { supabase } from "@/lib/supabase-client"
 
-// Function to validate API key
+/**
+ * Validates the provided API key
+ * @param request The incoming request to validate
+ * @returns Boolean indicating whether the API key is valid
+ */
 const validateApiKey = (request: NextRequest) => {
   const authHeader = request.headers.get("authorization")
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -14,6 +18,13 @@ const validateApiKey = (request: NextRequest) => {
   return apiKey === validApiKey
 }
 
+/**
+ * GET endpoint for checking active trading signals
+ * 
+ * Accepts query parameters:
+ * - timeframe: Filter by specific timeframe
+ * - pair: Filter by specific trading pair
+ */
 export async function GET(request: NextRequest) {
   // Authenticate the request
   if (!validateApiKey(request)) {
@@ -30,7 +41,9 @@ export async function GET(request: NextRequest) {
     if (timeframe) {
       const validTimeframes = ["5m", "15m", "30m", "1h"]
       if (!validTimeframes.includes(timeframe)) {
-        return NextResponse.json({ error: "Invalid timeframe. Must be one of: 5m, 15m, 30m, 1h" }, { status: 400 })
+        return NextResponse.json({ 
+          error: "Invalid timeframe. Must be one of: 5m, 15m, 30m, 1h" 
+        }, { status: 400 })
       }
     }
     
@@ -42,9 +55,12 @@ export async function GET(request: NextRequest) {
     // Start time for performance tracking
     const startTime = Date.now()
     
-    // Call the function to check and update signal statuses
-    // Pass the pair parameter if provided
-    const result = await signalGeneratorService.checkAndUpdateSignalStatuses(timeframe || undefined, pair || undefined)
+    console.log(`Starting signal check for${timeframe ? ` timeframe: ${timeframe}` : ''}${pair ? ` and pair: ${pair}` : ''}`);
+    
+    // The signal checker service now uses our OHLC database
+    // We no longer need to pass timeframe/pair as filters since all pairs
+    // are stored in the same database and filtering happens via SQL queries
+    const result = await checkAllActiveSignals();
     
     // Calculate execution time
     const executionTime = Date.now() - startTime
