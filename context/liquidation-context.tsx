@@ -29,6 +29,7 @@ interface TradingSignal {
   price: number
   description: string
   strength: "low" | "medium" | "high"
+  riskReward?: string
 }
 
 interface LiquidationContextType {
@@ -130,16 +131,6 @@ function getNextUpdateTime(timeframe: TimeframeType): Date {
   }
 
   return nextUpdate
-}
-
-// Simplifying the default levels to avoid syntax issues
-const DEFAULT_LEVELS = {
-  BTCUSDT: {
-    "1h": { support: 63000, resistance: 67000 },
-    "30m": { support: 63500, resistance: 66500 },
-    "15m": { support: 63800, resistance: 66200 },
-    "5m": { support: 64000, resistance: 66000 }
-  }
 }
 
 export function LiquidationProvider({ children }: { children: ReactNode }) {
@@ -612,16 +603,6 @@ export function LiquidationProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => b.volume - a.volume)
 
     return clusters
-  }
-
-  // Simple function to get default level - avoiding the problematic part
-  function getDefaultLevel(pair: string, tf: string, type: string, fallback: number): number {
-    try {
-      if (DEFAULT_LEVELS[pair] && DEFAULT_LEVELS[pair][tf]) {
-        return DEFAULT_LEVELS[pair][tf][type]
-      }
-    } catch (e) {}
-    return fallback
   }
 
   // Force refresh data

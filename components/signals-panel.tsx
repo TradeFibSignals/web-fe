@@ -41,7 +41,7 @@ export function SignalsPanel() {
   const [isLoading, setIsLoading] = useState<boolean>(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
-  // Funkce pro načtení signálů z API
+  // Function to fetch signals from API
   const fetchSignals = async () => {
     try {
       setIsLoading(true)
@@ -55,7 +55,7 @@ export function SignalsPanel() {
       const data = await response.json()
 
       if (data.success && data.data && data.data.length > 0) {
-        // Použijeme nejnovější signál
+        // Use the newest signal
         setFibSignal(data.data[0])
       } else {
         setFibSignal(null)
@@ -70,16 +70,16 @@ export function SignalsPanel() {
     }
   }
 
-  // Načtení signálů při změně páru nebo timeframe
+  // Load signals when pair or timeframe changes
   useEffect(() => {
     fetchSignals()
   }, [selectedPair, timeframe])
 
-  // Periodická aktualizace signálů
+  // Periodically update signals
   useEffect(() => {
     const interval = setInterval(() => {
       fetchSignals()
-    }, 30000) // Každých 30 sekund
+    }, 30000) // Every 30 seconds
 
     return () => clearInterval(interval)
   }, [selectedPair, timeframe])
@@ -95,7 +95,7 @@ export function SignalsPanel() {
     }
   }
 
-  // Funkce pro získání správné ikony a textu podle stavu signálu
+  // Function to get appropriate badge and text based on signal status
   const getStatusBadge = () => {
     if (!fibSignal) return null
 
@@ -230,7 +230,7 @@ export function SignalsPanel() {
                   <div className="text-xs text-muted-foreground">Entry (61.8%)</div>
                   <div className="font-medium">${formatPrice(fibSignal.entry_price)}</div>
                   {fibSignal.status === "waiting" && (
-                    <div className="text-xs text-primary mt-1">Waiting to hit this price</div>
+                    <div className="text-xs text-primary mt-1">Waiting for price to hit this level</div>
                   )}
                   {fibSignal.entry_hit && (
                     <div className="text-xs text-success mt-1">
@@ -256,14 +256,18 @@ export function SignalsPanel() {
                 <div className="mt-3">
                   <div className="text-xs text-muted-foreground mb-1">Fibonacci Levels</div>
                   <div className="grid grid-cols-3 gap-1 text-xs">
-                    {fibSignal.fib_levels.map((level: any) => (
-                      <div
-                        key={level.level}
-                        className={`p-1 rounded ${level.level === 61.8 ? "bg-primary/20 font-medium" : "bg-background/30"}`}
-                      >
-                        {level.level}%: ${formatPrice(level.price)}
-                      </div>
-                    ))}
+                    {Array.isArray(fibSignal.fib_levels) ? (
+                      fibSignal.fib_levels.map((level: any) => (
+                        <div
+                          key={level.level}
+                          className={`p-1 rounded ${level.level === 61.8 ? "bg-primary/20 font-medium" : "bg-background/30"}`}
+                        >
+                          {level.level}%: ${formatPrice(level.price)}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-1 rounded bg-background/30">No Fibonacci levels available</div>
+                    )}
                   </div>
                 </div>
               )}
