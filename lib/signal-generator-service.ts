@@ -305,7 +305,8 @@ export async function generateSignalsForTimeframe(
             fib_levels: JSON.stringify(fibLevels), // Make sure we're storing a stringified array
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
-            status: 'active',
+            // Změna zde - nové signály mají status "waiting" místo "active", protože čekají na entry hit
+            status: 'waiting',
             entry_hit: false,
           };
           
@@ -508,8 +509,8 @@ export async function checkAndUpdateSignalStatuses(
       throw new Error("Supabase client not available");
     }
 
-    // Get all active signals
-    let query = supabase.from("generated_signals").select("*").eq("status", "active");
+    // Get all waiting and active signals (not completed or expired)
+    let query = supabase.from("generated_signals").select("*").in("status", ["waiting", "active"]);
 
     // Apply filters if provided
     if (timeframe) {
@@ -520,18 +521,18 @@ export async function checkAndUpdateSignalStatuses(
       query = query.eq("pair", pair);
     }
 
-    const { data: activeSignals, error } = await query;
+    const { data: signals, error } = await query;
 
     if (error) {
-      console.error("Error fetching active signals:", error);
+      console.error("Error fetching signals:", error);
       throw error;
     }
 
-    console.log(`Found ${activeSignals?.length || 0} active signals to check`);
+    console.log(`Found ${signals?.length || 0} signals to check (waiting and active)`);
 
     // Initialize counters for tracking updates
     const results = {
-      checked: activeSignals?.length || 0,
+      checked: signals?.length || 0,
       updated: 0,
       completed: 0,
       expired: 0,
@@ -541,7 +542,7 @@ export async function checkAndUpdateSignalStatuses(
     // Group signals by pair for more efficient processing
     const signalsByPair: Record<string, any[]> = {};
 
-    activeSignals?.forEach((signal) => {
+    signals?.forEach((signal) => {
       if (!signalsByPair[signal.pair]) {
         signalsByPair[signal.pair] = [];
       }
@@ -549,7 +550,7 @@ export async function checkAndUpdateSignalStatuses(
     });
 
     // Process signals for each pair
-    for (const [signalPair, signals] of Object.entries(signalsByPair)) {
+    for (const [signalPair, pairSignals] of Object.entries(signalsByPair)) {
       try {
         // Get current price for the pair
         const currentPriceData = await fetchTimeframeCandles(signalPair, "1m", 1);
@@ -563,7 +564,7 @@ export async function checkAndUpdateSignalStatuses(
         console.log(`Current price for ${signalPair}: ${currentPrice}`);
 
         // Check each signal for the pair
-        for (const signal of signals) {
+        for (const signal of pairSignals) {
           try {
             // Fix: Parse fib_levels from JSON to array if it's a string
             if (signal.fib_levels && typeof signal.fib_levels === 'string') {
@@ -597,6 +598,8 @@ export async function checkAndUpdateSignalStatuses(
                 if (currentPrice <= signal.entry_price) {
                   entryHit = true;
                   entryHitTime = new Date().toISOString();
+                  // Status changes from "waiting" to "active" when entry is hit
+                  status = "active";
                   wasUpdated = true;
                   console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`);
                 }
@@ -605,6 +608,8 @@ export async function checkAndUpdateSignalStatuses(
                 if (currentPrice >= signal.entry_price) {
                   entryHit = true;
                   entryHitTime = new Date().toISOString();
+                  // Status changes from "waiting" to "active" when entry is hit
+                  status = "active";  
                   wasUpdated = true;
                   console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`);
                 }
@@ -759,13 +764,13 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
     if (checkError) {
       console.log(`Unable to access signal_cache table: ${checkError.message}`);
       console.log(`Fetching signals directly from generated_signals table`);
-      
+
       const { data: signals, error } = await supabase
         .from("generated_signals")
         .select("*")
         .eq("pair", pair)
         .eq("timeframe", timeframe)
-        .eq("status", "active")
+        .in("status", ["waiting", "active"]) // Změna zde - nyní bereme jak čekající, tak aktivní signály
         .order("created_at", { ascending: false })
         .limit(10);
 
@@ -809,7 +814,7 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
         .select("*")
         .eq("pair", pair)
         .eq("timeframe", timeframe)
-        .eq("status", "active")
+        .in("status", ["waiting", "active"]) // Změna zde - nyní bereme jak čekající, tak aktivní signály
         .order("created_at", { ascending: false })
         .limit(10);
 
@@ -841,7 +846,7 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
     let signalIds;
     try {
       signalIds = JSON.parse(cacheEntry.signal_ids);
-      
+
       if (!Array.isArray(signalIds) || signalIds.length === 0) {
         console.log(`Invalid or empty signal_ids in cache for ${pair}_${timeframe}`);
         return [];
@@ -855,6 +860,7 @@ export async function getSignalsFromCache(pair: string, timeframe: string): Prom
       .from("generated_signals")
       .select("*")
       .in("signal_id", signalIds)
+      .in("status", ["waiting", "active"]) // Změna zde - nyní bereme jak čekající, tak aktivní signály
       .order("created_at", { ascending: false });
 
     if (error) {

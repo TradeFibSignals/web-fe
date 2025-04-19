@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     
     // For count-only mode, just return the total number of active signals
     if (mode === "count-only") {
-      let query = supabase.from("generated_signals").select("id", { count: "exact" }).eq("status", "active")
+      let query = supabase.from("generated_signals").select("id", { count: "exact" }).in("status", ["waiting", "active"])
       
       if (timeframe) {
         query = query.eq("timeframe", timeframe)
@@ -76,11 +76,11 @@ export async function GET(request: NextRequest) {
     }
     
     // For normal mode, process signals in batches
-    // Get active signals with pagination
+    // Get waiting and active signals with pagination
     let query = supabase
       .from("generated_signals")
       .select("*")
-      .eq("status", "active")
+      .in("status", ["waiting", "active"])
       .order("created_at", { ascending: true })
       .range(batchOffset, batchOffset + batchSize - 1)
     
@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
     const { data: activeSignals, error, count } = await query
     
     if (error) {
-      console.error("Error fetching active signals:", error)
+      console.error("Error fetching signals:", error)
       return NextResponse.json({ error: "Failed to fetch signals" }, { status: 500 })
     }
     
@@ -220,31 +220,33 @@ export async function GET(request: NextRequest) {
             let exitTime: Date | null = null
             let updateNeeded = false
             
-            // Check if entry price has been hit (if not already)
-            if (!entryHit) {
+            // First check if entry price has been hit (if not already) - only for 'waiting' status
+            if (!entryHit && status === "waiting") {
               if (signal.signal_type === "long") {
                 // For long positions - price must drop to or below entry price
                 if (currentPrice <= signal.entry_price) {
                   entryHit = true
                   entryHitTime = new Date().toISOString()
+                  status = "active" // Change status from "waiting" to "active"
                   updateNeeded = true
                   if (signalDebug) signalDebug.action = "entry_hit_long"
-                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice}`)
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} LONG signal at ${currentPrice} - status changed to active`)
                 }
               } else {
                 // For short positions - price must rise to or above entry price
                 if (currentPrice >= signal.entry_price) {
                   entryHit = true
                   entryHitTime = new Date().toISOString()
+                  status = "active" // Change status from "waiting" to "active"
                   updateNeeded = true
                   if (signalDebug) signalDebug.action = "entry_hit_short"
-                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice}`)
+                  console.log(`Entry hit for ${signalPair} ${signal.timeframe} SHORT signal at ${currentPrice} - status changed to active`)
                 }
               }
             }
             
             // If signal is active (entry price has been hit), check TP/SL
-            if (entryHit) {
+            if (entryHit || status === "active") {
               if (signal.signal_type === "long") {
                 // For long positions - TP above entry, SL below entry
                 if (currentPrice >= signal.take_profit) {
@@ -290,11 +292,11 @@ export async function GET(request: NextRequest) {
               }
             }
             
-            // Check signal expiration (if older than 7 days and not activated)
+            // Check signal expiration (if older than 7 days and not activated - still in waiting status)
             const signalAge = Date.now() - new Date(signal.created_at).getTime()
-            const maxSignalAge = 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+            const maxSignalAge = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
             
-            if (!entryHit && signalAge > maxSignalAge) {
+            if (status === "waiting" && signalAge > maxSignalAge) {
               isCompleted = true
               exitType = "expired"
               exitPrice = currentPrice
